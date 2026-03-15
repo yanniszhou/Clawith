@@ -153,11 +153,21 @@ async def call_llm(
     # Load tools dynamically from DB
     tools_for_llm = await get_agent_tools_for_llm(agent_id) if agent_id else AGENT_TOOLS
 
-    # Convert messages to LLMMessage format
+    # Convert messages to LLMMessage format; only allow API roles (system/user/assistant/tool)
+    def _normalized_role(m: dict) -> str:
+        v = m.get("role", "user") or "user"
+        if hasattr(v, "value"):
+            v = v.value
+        return (v if isinstance(v, str) else str(v)).strip().lower().replace("-", "_")
+
     api_messages = [LLMMessage(role="system", content=system_prompt)]
     for msg in messages:
+        r = _normalized_role(msg)
+        if r in ("tool_call", "toolcall"):
+            continue  # never send to API; should be assistant+tool upstream
+        role = r if r in ("system", "user", "assistant", "tool") else "user"
         api_messages.append(LLMMessage(
-            role=msg.get("role", "user"),
+            role=role,
             content=msg.get("content"),
             tool_calls=msg.get("tool_calls"),
             tool_call_id=msg.get("tool_call_id"),
@@ -512,9 +522,15 @@ async def websocket_chat(
     # Build conversation context from history
     # IMPORTANT: Include tool_call messages so the LLM maintains tool-calling behavior.
     # Without them, Claude sees user→assistant-text patterns and learns to skip tools.
+    # Normalize role so we never send "tool_call"/"toolcall" to APIs that only accept system/user/assistant/tool.
+    def _normalize_role(r) -> str:
+        v = getattr(r, "value", None) or r or ""
+        return (v if isinstance(v, str) else str(v)).strip().lower().replace("-", "_")
+
     conversation: list[dict] = []
     for msg in history_messages:
-        if msg.role == "tool_call":
+        role_norm = _normalize_role(msg.role)
+        if role_norm in ("tool_call", "toolcall"):
             # Convert stored tool_call JSON into OpenAI-format assistant+tool pair
             try:
                 import json as _j_hist
@@ -544,11 +560,13 @@ async def websocket_chat(
                 })
             except Exception:
                 continue  # Skip malformed tool_call records
-        else:
-            entry = {"role": msg.role, "content": msg.content}
+        elif role_norm in ("user", "assistant", "system", "tool"):
+            # Only pass API-allowed roles; skip any other variant to avoid e.g. DeepSeek 400 on "toolcall"
+            entry = {"role": role_norm, "content": msg.content}
             if hasattr(msg, 'thinking') and msg.thinking:
                 entry["thinking"] = msg.thinking
             conversation.append(entry)
+        # else: skip unknown roles (e.g. stray "tool_call" that didn't parse)
 
     try:
         # Send welcome message on new session (no history)

@@ -44,7 +44,7 @@ load_env() {
     : "${DATABASE_URL:=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable}"
     export DATABASE_URL
 
-    # Parse host and port from DATABASE_URL regardless of hostname
+    # Parse host and port from DATABASE_URL (supports external DB)
     # Format: postgresql+asyncpg://user:pass@host:port/dbname?...
     _db_hostpart=$(echo "$DATABASE_URL" | sed 's|.*://[^@]*@||' | sed 's|/.*||' | sed 's|?.*||')
     PG_HOST="${_db_hostpart%%:*}"
@@ -119,7 +119,10 @@ add_pg_path() {
 # 启动 PostgreSQL
 # ═══════════════════════════════════════════════════════
 start_postgres() {
+<<<<<<< Updated upstream
     # Skip local PostgreSQL management when using an external database
+=======
+>>>>>>> Stashed changes
     if [ "$EXTERNAL_DB" = true ]; then
         echo -e "${GREEN}🐘 Using external database at ${PG_HOST}:${PG_PORT} — skipping local PostgreSQL startup${NC}"
         return 0
