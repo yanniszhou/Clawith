@@ -288,7 +288,7 @@ export default function Layout() {
                 <div className="sidebar-top">
                     <div className="sidebar-logo">
                         <img src={theme === 'dark' ? '/logo-white.png' : '/logo-black.png'} alt="" style={{ width: 22, height: 22 }} />
-                        <span className="sidebar-logo-text">Clawith</span>
+                        <span className="sidebar-logo-text">iWorker</span>
                     </div>
 
 

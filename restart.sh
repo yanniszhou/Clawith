@@ -128,10 +128,7 @@ add_pg_path() {
 # 启动 PostgreSQL
 # ═══════════════════════════════════════════════════════
 start_postgres() {
-<<<<<<< Updated upstream
     # Skip local PostgreSQL management when using an external database
-=======
->>>>>>> Stashed changes
     if [ "$EXTERNAL_DB" = true ]; then
         echo -e "${GREEN}🐘 Using external database at ${PG_HOST}:${PG_PORT} — skipping local PostgreSQL startup${NC}"
         return 0

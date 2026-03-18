@@ -84,12 +84,12 @@ export default function Login() {
                         Open Source · Multi-Agent Collaboration
                     </div>
                     <h1 className="login-hero-title">
-                        Clawith<br />
+                        iWorker<br />
                         <span style={{ fontSize: '0.65em', fontWeight: 600, opacity: 0.85 }}>OpenClaw for Teams</span>
                     </h1>
                     <p className="login-hero-desc">
                         OpenClaw empowers individuals.<br />
-                        Clawith scales it to frontier organizations.
+                        iWorker scales it to frontier organizations.
                     </p>
                     <div className="login-hero-features">
                         <div className="login-hero-feature">
@@ -133,7 +133,7 @@ export default function Login() {
 
                 <div className="login-form-wrapper">
                     <div className="login-form-header">
-                        <div className="login-form-logo"><img src="/logo-black.png" className="login-logo-img" alt="" style={{ width: 28, height: 28, marginRight: 8, verticalAlign: 'middle' }} />Clawith</div>
+                        <div className="login-form-logo"><img src="/logo-black.png" className="login-logo-img" alt="" style={{ width: 28, height: 28, marginRight: 8, verticalAlign: 'middle' }} />iWorker</div>
                         <h2 className="login-form-title">
                             {isRegister ? t('auth.register') : t('auth.login')}
                         </h2>
