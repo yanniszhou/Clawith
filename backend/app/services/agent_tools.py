@@ -111,7 +111,7 @@ AGENT_TOOLS = [
             },
         },
     },
-    # --- Trigger management tools (Pulse engine) ---
+    # --- Trigger management tools (Aware engine) ---
     {
         "type": "function",
         "function": {
@@ -1141,7 +1141,7 @@ async def execute_tool(
         elif tool_name == "read_webpage":
             result = await _jina_read(arguments)  # redirect legacy to jina
         elif tool_name == "plaza_get_new_posts":
-            result = await _plaza_get_new_posts(arguments)
+            result = await _plaza_get_new_posts(agent_id, arguments)
         elif tool_name == "plaza_create_post":
             result = await _plaza_create_post(agent_id, arguments)
         elif tool_name == "plaza_add_comment":
@@ -2082,7 +2082,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
             # ── Shortcut: if caller provided user_id or open_id directly ──
             if (direct_user_id or direct_open_id) and not member_name:
                 config_result = await db.execute(
-                    select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
+                    select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
                 )
                 config = config_result.scalar_one_or_none()
                 if not config:
@@ -2151,7 +2151,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     _found_id_type = "open_id"
                 if _found_id:
                     config_result = await db.execute(
-                        select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
+                        select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
                     )
                     config = config_result.scalar_one_or_none()
                     if not config:
@@ -2179,7 +2179,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
 
             # Get the agent's Feishu bot credentials
             config_result = await db.execute(
-                select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
+                select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
             )
             config = config_result.scalar_one_or_none()
             if not config:
@@ -2696,16 +2696,24 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
 # Plaza Tools — Agent Square social feed
 # ═══════════════════════════════════════════════════════
 
-async def _plaza_get_new_posts(arguments: dict) -> str:
-    """Get recent posts from the Agent Plaza."""
+async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: dict) -> str:
+    """Get recent posts from the Agent Plaza, scoped to agent's tenant."""
     from app.models.plaza import PlazaPost, PlazaComment
+    from app.models.agent import Agent as AgentModel
     from sqlalchemy import desc
 
     limit = min(arguments.get("limit", 10), 20)
 
     try:
         async with async_session() as db:
+            # Resolve agent's tenant_id
+            ar = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
+            agent = ar.scalar_one_or_none()
+            tenant_id = agent.tenant_id if agent else None
+
             q = select(PlazaPost).order_by(desc(PlazaPost.created_at)).limit(limit)
+            if tenant_id:
+                q = q.where(PlazaPost.tenant_id == tenant_id)
             result = await db.execute(q)
             posts = result.scalars().all()
 
@@ -2984,7 +2992,7 @@ async def _import_mcp_server(agent_id: uuid.UUID, arguments: dict) -> str:
     return await import_mcp_from_smithery(server_id, agent_id, config or None, reauthorize=reauthorize)
 
 
-# ─── Trigger Management Handlers (Pulse Engine) ────────────────────
+# ─── Trigger Management Handlers (Aware Engine) ────────────────────
 
 MAX_TRIGGERS_PER_AGENT = 20
 VALID_TRIGGER_TYPES = {"cron", "once", "interval", "poll", "on_message", "webhook"}
@@ -3029,6 +3037,25 @@ async def _handle_set_trigger(agent_id: uuid.UUID, arguments: dict) -> str:
     elif ttype == "on_message":
         if not config.get("from_agent_name") and not config.get("from_user_name"):
             return "❌ on_message trigger requires config.from_agent_name (for agents) or config.from_user_name (for human users on Feishu/Slack/Discord)"
+        # Snapshot the latest message timestamp so we only detect NEW messages after this point
+        # This prevents false positives from already-processed messages
+        try:
+            from app.models.audit import ChatMessage
+            from app.models.chat_session import ChatSession
+            from sqlalchemy import cast as sa_cast, String as SaString
+            async with async_session() as _snap_db:
+                _snap_q = select(ChatMessage.created_at).join(
+                    ChatSession, ChatMessage.conversation_id == sa_cast(ChatSession.id, SaString)
+                ).where(
+                    ChatSession.agent_id == agent_id,
+                    ChatMessage.created_at.isnot(None),
+                ).order_by(ChatMessage.created_at.desc()).limit(1)
+                _snap_r = await _snap_db.execute(_snap_q)
+                _latest_ts = _snap_r.scalar_one_or_none()
+                if _latest_ts:
+                    config["_since_ts"] = _latest_ts.isoformat()
+        except Exception:
+            pass  # Fallback to trigger.created_at in the daemon
     elif ttype == "webhook":
         # Auto-generate a unique token for the webhook URL
         import secrets

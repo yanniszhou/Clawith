@@ -82,6 +82,7 @@ const statusLabel = (s: string, t: any) => {
         case 'stopped': return t('dashboard.status.stopped');
         case 'error': return t('dashboard.status.error');
         case 'creating': return t('dashboard.status.creating');
+        case 'disconnected': return t('dashboard.status.disconnected');
         default: return s;
     }
 };

@@ -157,7 +157,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
                     messages=messages,
                     tools=tools_for_llm if tools_for_llm else None,
                     temperature=0.7,
-                    max_tokens=get_max_tokens(model.provider, model.model),
+                    max_tokens=get_max_tokens(model.provider, model.model, getattr(model, 'max_output_tokens', None)),
                 )
             except LLMError as e:
                 await _log_error(task_id, f"LLM 错误: {e}")

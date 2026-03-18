@@ -24,12 +24,21 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
         }
         const error = await res.json().catch(() => ({ detail: 'Request failed' }));
         // Pydantic validation errors return detail as an array of objects
+        const fieldLabels: Record<string, string> = {
+            name: '名称',
+            role_description: '角色描述',
+            agent_type: '智能体类型',
+            primary_model_id: '主模型',
+            max_tokens_per_day: '每日 Token 上限',
+            max_tokens_per_month: '每月 Token 上限',
+        };
         let message = '';
         if (Array.isArray(error.detail)) {
             message = error.detail
                 .map((e: any) => {
                     const field = e.loc?.slice(-1)[0] || '';
-                    return field ? `${field}: ${e.msg}` : e.msg;
+                    const label = fieldLabels[field] || field;
+                    return label ? `${label}: ${e.msg}` : e.msg;
                 })
                 .join('; ');
         } else {
@@ -118,7 +127,7 @@ export function uploadFileWithProgress(
 
 // ─── Auth ─────────────────────────────────────────────
 export const authApi = {
-    register: (data: { username: string; email: string; password: string; display_name: string; tenant_id?: string }) =>
+    register: (data: { username: string; email: string; password: string; display_name: string }) =>
         request<TokenResponse>('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
 
     login: (data: { username: string; password: string }) =>
@@ -132,8 +141,31 @@ export const authApi = {
 
 // ─── Tenants ──────────────────────────────────────────
 export const tenantApi = {
-    listPublic: () =>
-        request<{ id: string; name: string; slug: string }[]>('/tenants/public/list'),
+    selfCreate: (data: { name: string }) =>
+        request<any>('/tenants/self-create', { method: 'POST', body: JSON.stringify(data) }),
+
+    join: (invitationCode: string) =>
+        request<any>('/tenants/join', { method: 'POST', body: JSON.stringify({ invitation_code: invitationCode }) }),
+
+    registrationConfig: () =>
+        request<{ allow_self_create_company: boolean }>('/tenants/registration-config'),
+};
+
+export const adminApi = {
+    listCompanies: () =>
+        request<any[]>('/admin/companies'),
+
+    createCompany: (data: { name: string }) =>
+        request<any>('/admin/companies', { method: 'POST', body: JSON.stringify(data) }),
+
+    toggleCompany: (id: string) =>
+        request<any>(`/admin/companies/${id}/toggle`, { method: 'PUT' }),
+
+    getPlatformSettings: () =>
+        request<any>('/admin/platform-settings'),
+
+    updatePlatformSettings: (data: any) =>
+        request<any>('/admin/platform-settings', { method: 'PUT', body: JSON.stringify(data) }),
 };
 
 // ─── Agents ───────────────────────────────────────────
@@ -252,7 +284,10 @@ export const channelApi = {
 
 // ─── Enterprise ───────────────────────────────────────
 export const enterpriseApi = {
-    llmModels: () => request<any[]>('/enterprise/llm-models'),
+    llmModels: () => {
+        const tid = localStorage.getItem('current_tenant_id');
+        return request<any[]>(`/enterprise/llm-models${tid ? `?tenant_id=${tid}` : ''}`);
+    },
     templates: () => request<any[]>('/agents/templates'),
 
     // Enterprise Knowledge Base
@@ -321,7 +356,10 @@ export const scheduleApi = {
 
 // ─── Skills ───────────────────────────────────────────
 export const skillApi = {
-    list: () => request<any[]>('/skills/'),
+    list: () => {
+        const tid = localStorage.getItem('current_tenant_id');
+        return request<any[]>(`/skills/${tid ? `?tenant_id=${tid}` : ''}`);
+    },
     get: (id: string) => request<any>(`/skills/${id}`),
     create: (data: any) =>
         request<any>('/skills/', { method: 'POST', body: JSON.stringify(data) }),
@@ -338,9 +376,19 @@ export const skillApi = {
         delete: (path: string) =>
             request<any>(`/skills/browse/delete?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
     },
+    // ClawHub marketplace integration
+    clawhub: {
+        search: (q: string) => request<any[]>(`/skills/clawhub/search?q=${encodeURIComponent(q)}`),
+        detail: (slug: string) => request<any>(`/skills/clawhub/detail/${slug}`),
+        install: (slug: string) => request<any>('/skills/clawhub/install', { method: 'POST', body: JSON.stringify({ slug }) }),
+    },
+    importFromUrl: (url: string) =>
+        request<any>('/skills/import-from-url', { method: 'POST', body: JSON.stringify({ url }) }),
+    previewUrl: (url: string) =>
+        request<any>('/skills/import-from-url/preview', { method: 'POST', body: JSON.stringify({ url }) }),
 };
 
-// ─── Triggers (Pulse Engine) ──────────────────────────
+// ─── Triggers (Aware Engine) ──────────────────────────
 export const triggerApi = {
     list: (agentId: string) =>
         request<any[]>(`/agents/${agentId}/triggers`),

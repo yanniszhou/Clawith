@@ -76,14 +76,17 @@ const fetchJson = async <T,>(url: string): Promise<T> => {
     return res.json();
 };
 
-const statusDotClass = (status: string) => {
-    switch (status) {
-        case 'running': return 'running';
-        case 'stopped': return 'stopped';
-        case 'creating': return 'creating';
-        case 'error': return 'error';
-        default: return 'idle';
+/* Compute display badge status for an agent */
+const getAgentBadgeStatus = (agent: any): string | null => {
+    if (agent.status === 'error') return 'error';
+    if (agent.status === 'creating') return 'creating';
+    // OpenClaw disconnected detection: 60 min timeout
+    if (agent.agent_type === 'openclaw' && agent.status === 'running' && agent.openclaw_last_seen) {
+        const elapsed = Date.now() - new Date(agent.openclaw_last_seen).getTime();
+        if (elapsed > 60 * 60 * 1000) return 'disconnected';
     }
+    // idle / running / stopped → no badge
+    return null;
 };
 
 /* ────── Account Settings Modal ────── */
@@ -254,34 +257,15 @@ export default function Layout() {
         });
     };
 
-    // Tenant state
-    const [currentTenant, setCurrentTenant] = useState(() => localStorage.getItem('current_tenant_id') || '');
-    const [showNewCompany, setShowNewCompany] = useState(false);
-    const [newCompanyName, setNewCompanyName] = useState('');
+    // Use user's own tenant_id directly (no switching)
+    const currentTenant = user?.tenant_id || '';
 
-    const { data: tenants = [] } = useQuery({
-        queryKey: ['tenants', user?.role],
-        queryFn: () =>
-            user?.role === 'platform_admin'
-                ? fetchJson<any[]>('/tenants/')
-                : fetchJson<any[]>('/tenants/public/list'),
-        enabled: !!user,
-    });
-
-    // Auto-select user's tenant or first available tenant; also fix stale localStorage values
+    // Keep tenant in localStorage for other components that read it
     useEffect(() => {
-        if (!user) return;
-        const validTenantIds = tenants.map((t: any) => t.id);
-        const storedIsValid = currentTenant &&
-            (validTenantIds.includes(currentTenant) || currentTenant === user.tenant_id);
-        if (!storedIsValid) {
-            const fallback = user.tenant_id || (tenants.length > 0 ? tenants[0].id : '');
-            if (fallback) {
-                setCurrentTenant(fallback);
-                localStorage.setItem('current_tenant_id', fallback);
-            }
+        if (currentTenant) {
+            localStorage.setItem('current_tenant_id', currentTenant);
         }
-    }, [user, tenants, currentTenant]);
+    }, [currentTenant]);
 
     const { data: agents = [] } = useQuery({
         queryKey: ['agents', currentTenant],
@@ -297,29 +281,6 @@ export default function Layout() {
     const toggleLang = () => {
         i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh');
     };
-    const switchTenant = (tenantId: string) => {
-        setCurrentTenant(tenantId);
-        localStorage.setItem('current_tenant_id', tenantId);
-        // Notify other components about tenant change
-        window.dispatchEvent(new StorageEvent('storage', { key: 'current_tenant_id', newValue: tenantId }));
-    };
-    const currentTenantName = tenants.find(
-        (t: any) => t.id === (currentTenant || user?.tenant_id),
-    )?.name;
-    const createCompany = async () => {
-        if (!newCompanyName.trim()) return;
-        const token = localStorage.getItem('token');
-        const slug = newCompanyName.toLowerCase().replace(/[\s]+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 50)
-            || `company-${Date.now().toString(36)}`;
-        await fetch('/api/tenants/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            body: JSON.stringify({ name: newCompanyName, slug, im_provider: 'web_only' }),
-        });
-        setNewCompanyName('');
-        setShowNewCompany(false);
-        queryClient.invalidateQueries({ queryKey: ['tenants'] });
-    };
 
     return (
         <div className="app-layout">
@@ -330,73 +291,7 @@ export default function Layout() {
                         <span className="sidebar-logo-text">Clawith</span>
                     </div>
 
-                    {/* Company Switcher */}
-                    {user?.role === 'platform_admin' && (
-                        <div className="tenant-switcher" style={{ padding: '0 12px 8px', borderBottom: '1px solid var(--border-subtle)', marginBottom: '4px' }}>
-                            <select
-                                value={currentTenant}
-                                onChange={e => switchTenant(e.target.value)}
-                                style={{
-                                    width: '100%', padding: '6px 8px', fontSize: '12px',
-                                    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
-                                    border: '1px solid var(--border-subtle)', borderRadius: '6px',
-                                    cursor: 'pointer',
-                                }}
-                            >
-                                {tenants.map((t: any) => (
-                                    <option key={t.id} value={t.id}>{t.name}</option>
-                                ))}
-                            </select>
-                            {showNewCompany ? (
-                                <div style={{ marginTop: '6px', display: 'flex', gap: '4px' }}>
-                                    <input
-                                        value={newCompanyName}
-                                        onChange={e => setNewCompanyName(e.target.value)}
-                                        onKeyDown={e => e.key === 'Enter' && createCompany()}
-                                        placeholder={t('layout.companyName')}
-                                        style={{
-                                            flex: 1, padding: '4px 6px', fontSize: '11px',
-                                            background: 'var(--bg-elevated)', color: 'var(--text-primary)',
-                                            border: '1px solid var(--border-subtle)', borderRadius: '4px',
-                                        }}
-                                        autoFocus
-                                    />
-                                    <button onClick={createCompany} style={{
-                                        fontSize: '11px', padding: '4px 6px',
-                                        background: 'var(--accent-primary)', color: 'white',
-                                        border: 'none', borderRadius: '4px', cursor: 'pointer',
-                                    }}>{t('layout.create')}</button>
-                                    <button onClick={() => { setShowNewCompany(false); setNewCompanyName(''); }} style={{
-                                        fontSize: '11px', padding: '4px 6px',
-                                        background: 'transparent', color: 'var(--text-tertiary)',
-                                        border: 'none', cursor: 'pointer',
-                                    }}>✕</button>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => setShowNewCompany(true)}
-                                    style={{
-                                        marginTop: '4px', width: '100%', padding: '4px', fontSize: '11px',
-                                        background: 'transparent', color: 'var(--text-tertiary)',
-                                        border: '1px dashed var(--border-subtle)', borderRadius: '4px',
-                                        cursor: 'pointer', textAlign: 'center',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
-                                    }}
-                                >
-                                    {SidebarIcons.plus} {t('layout.newCompany')}
-                                </button>
-                            )}
-                        </div>
-                    )}
-                    {user?.role !== 'platform_admin' && user?.tenant_id && (
-                        <div className="tenant-name" style={{
-                            padding: '0 16px 8px', fontSize: '11px', color: 'var(--text-secondary)',
-                            borderBottom: '1px solid var(--border-subtle)', marginBottom: '4px',
-                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-                        }}>
-                            {currentTenantName || t('layout.myCompany')}
-                        </div>
-                    )}
+
 
                     <div className="sidebar-section">
                         <NavLink to="/plaza" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
@@ -444,7 +339,10 @@ export default function Layout() {
                             const bp = pinnedAgents.has(b.id) ? 1 : 0;
                             return bp - ap;
                         });
-                        const renderAgent = (agent: any) => (
+                        const renderAgent = (agent: any) => {
+                            const badge = getAgentBadgeStatus(agent);
+                            const avatarChar = (agent.name || '?')[0].toUpperCase();
+                            return (
                             <div key={agent.id} style={{ position: 'relative' }} className={`sidebar-agent-item${agent.creator_id === user?.id ? ' owned' : ''}`}>
                                 <NavLink
                                     to={`/agents/${agent.id}`}
@@ -452,8 +350,9 @@ export default function Layout() {
                                     title={agent.name}
                                     style={{ paddingRight: '28px' }}
                                 >
-                                    <span className="sidebar-item-icon">
-                                        <span className={`status-dot ${statusDotClass(agent.status)}`} />
+                                    <span className="sidebar-item-icon" style={{ position: 'relative' }}>
+                                        <span className="agent-avatar">{avatarChar}</span>
+                                        {badge && <span className={`agent-avatar-badge ${badge}`} />}
                                     </span>
                                     <span className="sidebar-item-text">{agent.name}</span>
                                 </NavLink>
@@ -469,7 +368,7 @@ export default function Layout() {
                                     </button>
                                 )}
                             </div>
-                        );
+                        );};
                         return (
                             <>
                                 {sortedAgents.map(renderAgent)}
@@ -503,9 +402,13 @@ export default function Layout() {
                             </NavLink>
                         )}
                         {user && user.role === 'platform_admin' && (
-                            <NavLink to="/invitations" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`} title={t('nav.invitations', 'Invitation Codes')}>
-                                <span className="sidebar-item-icon" style={{ display: 'flex' }}>🎟️</span>
-                                <span className="sidebar-item-text">{t('nav.invitations', 'Invitation Codes')}</span>
+                            <NavLink to="/admin/companies" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`} title={t('nav.adminCompanies', 'Companies')}>
+                                <span className="sidebar-item-icon" style={{ display: 'flex' }}>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <rect x="2" y="5" width="12" height="9" rx="1" /><path d="M5 5V3a2 2 0 012-2h2a2 2 0 012 2v2" />
+                                    </svg>
+                                </span>
+                                <span className="sidebar-item-text">{t('nav.adminCompanies', 'Companies')}</span>
                             </NavLink>
                         )}
                     </div>
@@ -527,13 +430,14 @@ export default function Layout() {
                                 {SidebarIcons.bell}
                                 {(unreadCount as number) > 0 && (
                                     <span style={{
-                                        position: 'absolute', top: '-2px', right: '-2px',
-                                        width: '16px', height: '16px', borderRadius: '50%',
+                                        position: 'absolute', top: '-2px', right: '-4px',
+                                        minWidth: '16px', height: '16px', borderRadius: '8px',
+                                        padding: '0 4px', boxSizing: 'border-box',
                                         background: 'var(--error)', color: '#fff',
                                         fontSize: '10px', fontWeight: 600,
                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                                         lineHeight: 1,
-                                    }}>{(unreadCount as number) > 9 ? '9+' : unreadCount}</span>
+                                    }}>{(unreadCount as number) > 99 ? '99+' : unreadCount}</span>
                                 )}
                             </button>
                             <button className="btn btn-ghost" onClick={toggleTheme} style={{
@@ -588,6 +492,11 @@ export default function Layout() {
                             }} title={t('layout.logout', 'Logout')}>
                                 {SidebarIcons.logout}
                             </button>
+                        </div>
+                        {/* Version */}
+                        <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-quaternary)', marginTop: '8px', letterSpacing: '0.3px' }}>
+                            v{(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').split('+')[0]}
+                            <span style={{ opacity: 0.6 }}>{(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').includes('+') ? ` b${(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').split('+')[1]}` : ''}</span>
                         </div>
                     </div>
                 </div>

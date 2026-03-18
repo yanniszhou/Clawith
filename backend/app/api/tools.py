@@ -50,18 +50,24 @@ class AgentToolUpdate(BaseModel):
 # ─── Global Tool CRUD ──────────────────────────────────────
 @router.get("")
 async def list_tools(
+    tenant_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List platform tools (excludes agent-installed MCP tools — those live under /agent-installed)."""
+    """List platform tools scoped by tenant (builtin + tenant-specific)."""
+    from sqlalchemy import or_ as _or
     # Exclude tools that were installed by agents via import_mcp_server
-    from sqlalchemy import exists as _exists
     agent_installed_tids = select(AgentTool.tool_id).where(AgentTool.source == "user_installed")
-    result = await db.execute(
+    query = (
         select(Tool)
         .where(~Tool.id.in_(agent_installed_tids))
         .order_by(Tool.category, Tool.name)
     )
+    # Scope by tenant: show builtin (tenant_id is NULL) + tenant-specific tools
+    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
+    if tid:
+        query = query.where(_or(Tool.tenant_id == None, Tool.tenant_id == uuid.UUID(tid)))
+    result = await db.execute(query)
     tools = result.scalars().all()
     return [
         {
@@ -110,6 +116,7 @@ async def create_tool(
         mcp_server_name=data.mcp_server_name,
         mcp_tool_name=data.mcp_tool_name,
         is_default=data.is_default,
+        tenant_id=current_user.tenant_id,
     )
     db.add(tool)
     await db.commit()
@@ -250,18 +257,26 @@ async def test_mcp_connection(
 
 @router.get("/agent-installed")
 async def list_agent_installed_tools(
+    tenant_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin endpoint: list all user-installed (per-agent) tools with source agent info."""
+    """Admin endpoint: list user-installed tools scoped by tenant."""
     from app.models.agent import Agent
-    result = await db.execute(
+    query = (
         select(AgentTool, Tool, Agent)
         .join(Tool, AgentTool.tool_id == Tool.id)
         .outerjoin(Agent, AgentTool.installed_by_agent_id == Agent.id)
         .where(AgentTool.source == "user_installed")
         .order_by(AgentTool.created_at.desc())
     )
+    # Scope by tenant: only show tools installed by agents in this tenant
+    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
+    if tid:
+        from app.models.agent import Agent as Ag
+        tenant_agent_ids = select(Ag.id).where(Ag.tenant_id == tid)
+        query = query.where(AgentTool.agent_id.in_(tenant_agent_ids))
+    result = await db.execute(query)
     rows = result.all()
     return [
         {

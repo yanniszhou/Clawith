@@ -250,10 +250,16 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
         return False
 
     since = trigger.last_fired_at or trigger.created_at
-    # For never-fired on_message triggers, look back 5 minutes before creation
-    # to catch replies that arrived while the Agent was still creating the trigger
-    if trigger.fire_count == 0 and not trigger.last_fired_at and from_user_name:
-        since = trigger.created_at - timedelta(minutes=5)
+    # Use _since_ts snapshot from trigger creation (set by _handle_set_trigger)
+    # This is more precise than the old 5-minute lookback which caused false positives
+    if trigger.fire_count == 0 and not trigger.last_fired_at:
+        since_ts_str = cfg.get("_since_ts")
+        if since_ts_str:
+            try:
+                since = datetime.fromisoformat(since_ts_str)
+            except Exception:
+                since = trigger.created_at
+        # No _since_ts and no last_fired_at → use trigger.created_at (no lookback)
 
     try:
         async with async_session() as db:
@@ -356,7 +362,7 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
 async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTrigger]):
     """Invoke an agent with context from one or more fired triggers.
 
-    Creates a Pulse Session (内心独白) and calls the LLM.
+    Creates a Reflection Session and calls the LLM.
     """
     from app.api.websocket import call_llm
     from app.services.agent_context import build_agent_context
@@ -410,7 +416,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
                 + "\n==========================="
             )
 
-            # Create Pulse Session (内心独白)
+            # Create Reflection Session
             title = f"🤖 内心独白：{', '.join(trigger_names)}"
             # Find agent's participant
             result = await db.execute(
@@ -457,7 +463,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
         async def on_chunk(text):
             collected_content.append(text)
 
-        # Persist tool calls into Pulse Session for Reflections visibility
+        # Persist tool calls into Reflection Session for Reflections visibility
         async def on_tool_call(data):
             try:
                 async with async_session() as _tc_db:
@@ -495,7 +501,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
             on_tool_call=on_tool_call,
         )
 
-        # Save assistant reply to Pulse session
+        # Save assistant reply to Reflection session
         async with async_session() as db:
             result = await db.execute(
                 select(Participant).where(Participant.type == "agent", Participant.ref_id == agent_id)

@@ -98,7 +98,7 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
                         messages=messages,
                         tools=tools_for_llm if tools_for_llm else None,
                         temperature=0.7,
-                        max_tokens=get_max_tokens(model.provider, model.model),
+                        max_tokens=get_max_tokens(model.provider, model.model, getattr(model, 'max_output_tokens', None)),
                     )
                 except LLMError as e:
                     logger.error(f"Schedule {schedule_id}: LLM error: {e}")

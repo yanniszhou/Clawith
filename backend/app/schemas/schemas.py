@@ -13,7 +13,6 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6, max_length=128)
     display_name: str | None = None
-    tenant_id: str | None = None  # UUID string of the company
     invitation_code: str | None = None
 
 
@@ -26,6 +25,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: "UserOut"
+    needs_company_setup: bool = False
 
 
 class UserOut(BaseModel):
@@ -56,9 +56,9 @@ class UserUpdate(BaseModel):
 # ─── Agent ──────────────────────────────────────────────
 
 class AgentCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=2, max_length=100, description="Agent name, 2-100 characters")
     agent_type: str = "native"  # native | openclaw
-    role_description: str = Field(default="", max_length=500)
+    role_description: str = Field(default="", max_length=500, description="Role description, max 500 characters")
     bio: str | None = None
     welcome_message: str | None = None
     avatar_url: str | None = None
@@ -251,6 +251,7 @@ class LLMModelCreate(BaseModel):
     max_tokens_per_day: int | None = None
     enabled: bool = True
     supports_vision: bool = False
+    max_output_tokens: int | None = None
 
 class LLMModelUpdate(BaseModel):
     provider: str | None = None
@@ -261,6 +262,7 @@ class LLMModelUpdate(BaseModel):
     max_tokens_per_day: int | None = None
     enabled: bool | None = None
     supports_vision: bool | None = None
+    max_output_tokens: int | None = None
 
 
 class LLMModelOut(BaseModel):
@@ -269,9 +271,11 @@ class LLMModelOut(BaseModel):
     model: str
     base_url: str | None = None
     label: str
+    api_key_masked: str = ""
     max_tokens_per_day: int | None = None
     enabled: bool
     supports_vision: bool = False
+    max_output_tokens: int | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

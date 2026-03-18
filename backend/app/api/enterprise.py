@@ -19,29 +19,103 @@ from app.schemas.schemas import (
 )
 from app.services.autonomy_service import autonomy_service
 from app.services.enterprise_sync import enterprise_sync_service
+from app.services.llm_utils import get_provider_manifest
 
 router = APIRouter(prefix="/enterprise", tags=["enterprise"])
 
 
 # ─── LLM Model Pool ────────────────────────────────────
 
+@router.get("/llm-providers")
+async def list_llm_providers(
+    current_user: User = Depends(get_current_user),
+):
+    """List supported LLM providers and capabilities from registry."""
+    return get_provider_manifest()
+
+
+class LLMTestRequest(BaseModel):
+    provider: str
+    model: str
+    api_key: str | None = None
+    base_url: str | None = None
+    model_id: str | None = None  # existing model ID to use stored API key
+
+
+@router.post("/llm-test")
+async def test_llm_model(
+    data: LLMTestRequest,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test an LLM model configuration by making a simple API call."""
+    import time
+    from app.services.llm_client import create_llm_client
+
+    # Resolve API key: use provided key, or look up from stored model
+    api_key = data.api_key if data.api_key and not data.api_key.startswith('****') else None
+    if not api_key and data.model_id:
+        result = await db.execute(select(LLMModel).where(LLMModel.id == data.model_id))
+        existing = result.scalar_one_or_none()
+        if existing:
+            api_key = existing.api_key_encrypted
+    if not api_key:
+        return {"success": False, "latency_ms": 0, "error": "API Key is required"}
+
+    start = time.time()
+    try:
+        client = create_llm_client(
+            provider=data.provider,
+            model=data.model,
+            api_key=api_key,
+            base_url=data.base_url or None,
+        )
+        # Simple test: ask model to say "ok"
+        from app.services.llm_client import LLMMessage
+        response = await client.complete(
+            messages=[LLMMessage(role="user", content="Say 'ok' and nothing else.")],
+            max_tokens=16,
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        reply = (response.content or "")[:100] if response else ""
+        return {"success": True, "latency_ms": latency_ms, "reply": reply}
+    except Exception as e:
+        latency_ms = int((time.time() - start) * 1000)
+        return {"success": False, "latency_ms": latency_ms, "error": str(e)[:500]}
+
+
+
 @router.get("/llm-models", response_model=list[LLMModelOut])
 async def list_llm_models(
+    tenant_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all LLM models in the pool."""
-    result = await db.execute(select(LLMModel).order_by(LLMModel.created_at.desc()))
-    return [LLMModelOut.model_validate(m) for m in result.scalars().all()]
+    """List LLM models scoped to the selected tenant."""
+    tid = tenant_id or str(current_user.tenant_id) if current_user.tenant_id else None
+    query = select(LLMModel).order_by(LLMModel.created_at.desc())
+    if tid:
+        query = query.where(LLMModel.tenant_id == uuid.UUID(tid))
+    result = await db.execute(query)
+    models = []
+    for m in result.scalars().all():
+        out = LLMModelOut.model_validate(m)
+        # Mask API key: show last 4 chars
+        key = m.api_key_encrypted or ""
+        out.api_key_masked = f"****{key[-4:]}" if len(key) > 4 else "****"
+        models.append(out)
+    return models
 
 
 @router.post("/llm-models", response_model=LLMModelOut, status_code=status.HTTP_201_CREATED)
 async def add_llm_model(
     data: LLMModelCreate,
+    tenant_id: str | None = None,
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add a new LLM model to the pool (admin)."""
+    """Add a new LLM model to the tenant's pool (admin)."""
+    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
     model = LLMModel(
         provider=data.provider,
         model=data.model,
@@ -51,6 +125,7 @@ async def add_llm_model(
         max_tokens_per_day=data.max_tokens_per_day,
         enabled=data.enabled,
         supports_vision=data.supports_vision,
+        tenant_id=uuid.UUID(tid) if tid else None,
     )
     db.add(model)
     await db.flush()
@@ -122,7 +197,7 @@ async def update_llm_model(
             model.label = data.label
         if hasattr(data, 'base_url') and data.base_url is not None:
             model.base_url = data.base_url
-        if data.api_key and data.api_key.strip():  # Only update API key if provided (not empty)
+        if data.api_key and data.api_key.strip() and not data.api_key.startswith('****'):  # Skip masked values
             model.api_key_encrypted = data.api_key.strip()
         if data.max_tokens_per_day is not None:
             model.max_tokens_per_day = data.max_tokens_per_day
@@ -171,16 +246,23 @@ async def update_enterprise_info(
 
 @router.get("/approvals", response_model=list[ApprovalRequestOut])
 async def list_approvals(
+    tenant_id: str | None = None,
     status_filter: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List approval requests. Platform admins see all; others see their own agents."""
+    """List approval requests scoped to a tenant."""
     query = select(ApprovalRequest)
-    # Platform admins see all approvals; regular users only see their own agents'
+    # Scope by tenant: only show approvals for agents belonging to this tenant
+    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
+    if tid:
+        tenant_agent_ids = select(Agent.id).where(Agent.tenant_id == tid)
+        query = query.where(ApprovalRequest.agent_id.in_(tenant_agent_ids))
+    # Non-admins further restricted to their own agents
     if current_user.role != "platform_admin":
-        agent_ids = select(Agent.id).where(Agent.creator_id == current_user.id)
-        query = query.where(ApprovalRequest.agent_id.in_(agent_ids))
+        query = query.where(ApprovalRequest.agent_id.in_(
+            select(Agent.id).where(Agent.creator_id == current_user.id)
+        ))
     if status_filter:
         query = query.where(ApprovalRequest.status == status_filter)
     query = query.order_by(ApprovalRequest.created_at.desc())
@@ -225,12 +307,18 @@ async def resolve_approval(
 @router.get("/audit-logs", response_model=list[AuditLogOut])
 async def list_audit_logs(
     agent_id: uuid.UUID | None = None,
+    tenant_id: str | None = None,
     limit: int = 50,
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List audit logs (admin only). Optionally filter by agent."""
+    """List audit logs scoped to a tenant (admin only)."""
     query = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+    # Scope by tenant: only show logs for agents belonging to this tenant
+    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
+    if tid:
+        tenant_agent_ids = select(Agent.id).where(Agent.tenant_id == tid)
+        query = query.where(AuditLog.agent_id.in_(tenant_agent_ids))
     if agent_id:
         query = query.where(AuditLog.agent_id == agent_id)
     result = await db.execute(query)
@@ -503,20 +591,34 @@ class InvitationCodeCreate(BaseModel):
     max_uses: int = 1    # max registrations per code
 
 
+def _require_tenant_admin(current_user: User) -> None:
+    """Check that the user is org_admin or platform_admin with a tenant."""
+    if current_user.role not in ("platform_admin", "org_admin"):
+        raise HTTPException(status_code=403, detail="Requires admin privileges")
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=400, detail="No company assigned")
+
+
 @router.post("/invitation-codes")
 async def create_invitation_codes(
     data: InvitationCodeCreate,
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Batch-create invitation codes."""
+    """Batch-create invitation codes for the current user's company."""
+    _require_tenant_admin(current_user)
     import random
     import string
 
     codes_created = []
     for _ in range(min(data.count, 100)):  # cap at 100 per batch
         code_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        code = InvitationCode(code=code_str, max_uses=data.max_uses, created_by=current_user.id)
+        code = InvitationCode(
+            code=code_str,
+            tenant_id=current_user.tenant_id,
+            max_uses=data.max_uses,
+            created_by=current_user.id,
+        )
         db.add(code)
         codes_created.append(code_str)
 
@@ -529,14 +631,16 @@ async def list_invitation_codes(
     page: int = 1,
     page_size: int = 20,
     search: str = "",
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List invitation codes with pagination and search."""
+    """List invitation codes for the current user's company."""
+    _require_tenant_admin(current_user)
     from sqlalchemy import func as sqla_func
 
-    stmt = select(InvitationCode)
-    count_stmt = select(sqla_func.count()).select_from(InvitationCode)
+    base_filter = InvitationCode.tenant_id == current_user.tenant_id
+    stmt = select(InvitationCode).where(base_filter)
+    count_stmt = select(sqla_func.count()).select_from(InvitationCode).where(base_filter)
 
     if search:
         stmt = stmt.where(InvitationCode.code.ilike(f"%{search}%"))
@@ -571,16 +675,19 @@ async def list_invitation_codes(
 
 @router.get("/invitation-codes/export")
 async def export_invitation_codes_csv(
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export all invitation codes as CSV, ordered by created_at."""
+    """Export invitation codes for the current user's company as CSV."""
+    _require_tenant_admin(current_user)
     import csv
     import io
     from fastapi.responses import StreamingResponse
 
     result = await db.execute(
-        select(InvitationCode).order_by(InvitationCode.created_at.asc())
+        select(InvitationCode)
+        .where(InvitationCode.tenant_id == current_user.tenant_id)
+        .order_by(InvitationCode.created_at.asc())
     )
     codes = result.scalars().all()
 
@@ -607,12 +714,18 @@ async def export_invitation_codes_csv(
 @router.delete("/invitation-codes/{code_id}")
 async def deactivate_invitation_code(
     code_id: str,
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Deactivate an invitation code."""
+    """Deactivate an invitation code (must belong to current user's company)."""
+    _require_tenant_admin(current_user)
     import uuid as _uuid
-    result = await db.execute(select(InvitationCode).where(InvitationCode.id == _uuid.UUID(code_id)))
+    result = await db.execute(
+        select(InvitationCode).where(
+            InvitationCode.id == _uuid.UUID(code_id),
+            InvitationCode.tenant_id == current_user.tenant_id,
+        )
+    )
     code = result.scalar_one_or_none()
     if not code:
         raise HTTPException(status_code=404, detail="Code not found")
