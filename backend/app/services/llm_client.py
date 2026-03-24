@@ -8,15 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Literal
 
 import httpx
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # ============================================================================
@@ -165,7 +163,7 @@ class LLMClient(ABC):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -177,7 +175,7 @@ class LLMClient(ABC):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         on_chunk: ChunkCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
@@ -236,7 +234,7 @@ class OpenAICompatibleClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: Any,
@@ -245,9 +243,10 @@ class OpenAICompatibleClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [m.to_openai_format() for m in messages],
-            "temperature": temperature,
             "stream": stream,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
 
         # Request usage stats in streaming responses (OpenAI extension)
         if stream:
@@ -272,10 +271,13 @@ class OpenAICompatibleClient(LLMClient):
         line: str,
         in_think: bool,
         tag_buffer: str,
-    ) -> tuple[LLMStreamChunk, bool, str]:
+        json_buffer: str = "",
+    ) -> tuple[LLMStreamChunk, bool, str, str]:
         """Parse a single SSE line from stream.
 
-        Returns (chunk, new_in_think, new_tag_buffer).
+        Returns (chunk, new_in_think, new_tag_buffer, new_json_buffer).
+        The json_buffer accumulates partial JSON from non-standard APIs that
+        split a single JSON object across multiple data: lines.
         """
         chunk = LLMStreamChunk()
 
@@ -285,17 +287,32 @@ class OpenAICompatibleClient(LLMClient):
         elif line.startswith("data:"):
             data_str = line[5:]
         else:
-            return chunk, in_think, tag_buffer
+            # Non-data lines (comments, event types, empty) — never buffer
+            return chunk, in_think, tag_buffer, json_buffer
 
         data_str = data_str.strip()
+        if not data_str:
+            return chunk, in_think, tag_buffer, json_buffer
+
         if data_str == "[DONE]":
             chunk.is_finished = True
-            return chunk, in_think, tag_buffer
+            return chunk, in_think, tag_buffer, ""
+
+        # Accumulate into json_buffer for split JSON handling
+        if json_buffer:
+            json_buffer += data_str
+        else:
+            json_buffer = data_str
 
         try:
-            data = json.loads(data_str)
+            data = json.loads(json_buffer)
+            json_buffer = ""  # Reset on successful parse
         except json.JSONDecodeError:
-            return chunk, in_think, tag_buffer
+            # Cap buffer at 64KB to prevent memory leaks
+            if len(json_buffer) > 65536:
+                logger.warning("[LLM] JSON buffer exceeded 64KB, discarding")
+                json_buffer = ""
+            return chunk, in_think, tag_buffer, json_buffer
 
         if "error" in data:
             raise LLMError(f"Stream error: {data['error']}")
@@ -306,7 +323,7 @@ class OpenAICompatibleClient(LLMClient):
 
         choices = data.get("choices", [])
         if not choices:
-            return chunk, in_think, tag_buffer
+            return chunk, in_think, tag_buffer, json_buffer
 
         choice = choices[0]
         delta = choice.get("delta", {})
@@ -331,7 +348,7 @@ class OpenAICompatibleClient(LLMClient):
                 chunk.tool_call = tc_delta
                 break  # Return one at a time
 
-        return chunk, in_think, tag_buffer
+        return chunk, in_think, tag_buffer, json_buffer
 
     def _filter_think_tags(
         self, text: str, in_think: bool, tag_buffer: str
@@ -382,7 +399,7 @@ class OpenAICompatibleClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -417,7 +434,7 @@ class OpenAICompatibleClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         on_chunk: ChunkCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
@@ -435,6 +452,7 @@ class OpenAICompatibleClient(LLMClient):
 
         in_think = False
         tag_buffer = ""
+        json_buffer = ""  # Buffer for non-standard APIs with split JSON (inspired by PR #120)
 
         max_retries = 3
         client = await self._get_client()
@@ -449,8 +467,8 @@ class OpenAICompatibleClient(LLMClient):
                         raise LLMError(f"HTTP {resp.status_code}: {error_body[:500]}")
 
                     async for line in resp.aiter_lines():
-                        chunk, in_think, tag_buffer = self._parse_stream_line(
-                            line, in_think, tag_buffer
+                        chunk, in_think, tag_buffer, json_buffer = self._parse_stream_line(
+                            line, in_think, tag_buffer, json_buffer
                         )
 
                         if chunk.is_finished:
@@ -501,6 +519,7 @@ class OpenAICompatibleClient(LLMClient):
                     tool_calls_data = []
                     in_think = False
                     tag_buffer = ""
+                    json_buffer = ""
                 else:
                     raise LLMError(f"Connection failed after {max_retries} attempts: {e}")
 
@@ -636,7 +655,7 @@ class OpenAIResponsesClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: Any,
@@ -645,9 +664,10 @@ class OpenAIResponsesClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self.model,
             "input": self._messages_to_input(messages),
-            "temperature": temperature,
             "stream": stream,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
 
         if max_tokens:
             payload["max_output_tokens"] = max_tokens
@@ -757,7 +777,7 @@ class OpenAIResponsesClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -789,7 +809,7 @@ class OpenAIResponsesClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         on_chunk: ChunkCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
@@ -1048,11 +1068,13 @@ class GeminiClient(LLMClient):
                     }],
                 })
 
+        generation_config: dict[str, Any] = {}
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+
         payload: dict[str, Any] = {
             "contents": contents or [{"role": "user", "parts": [{"text": ""}]}],
-            "generationConfig": {
-                "temperature": temperature,
-            },
+            "generationConfig": generation_config,
         }
 
         if max_tokens:
@@ -1147,7 +1169,7 @@ class GeminiClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -1183,7 +1205,7 @@ class GeminiClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         on_chunk: ChunkCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
@@ -1337,7 +1359,7 @@ class AnthropicClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: Any,
@@ -1358,9 +1380,10 @@ class AnthropicClient(LLMClient):
             "model": self.model,
             "messages": anthropic_messages,
             "max_tokens": max_tokens or 4096,
-            "temperature": temperature,
             "stream": stream,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
 
         if system_content:
             payload["system"] = system_content
@@ -1393,7 +1416,7 @@ class AnthropicClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -1454,7 +1477,7 @@ class AnthropicClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         on_chunk: ChunkCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
@@ -1684,6 +1707,14 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         protocol="openai_compatible",
         default_base_url="https://open.bigmodel.cn/api/paas/v4",
         default_max_tokens=8192,
+    ),
+    "baidu": ProviderSpec(
+        provider="baidu",
+        display_name="Baidu (Qianfan)",
+        protocol="openai_compatible",
+        default_base_url="https://qianfan.baidubce.com/v2",
+        supports_tool_choice=False,
+        default_max_tokens=4096,
     ),
     "gemini": ProviderSpec(
         provider="gemini",
@@ -1918,7 +1949,7 @@ async def chat_complete(
     messages: list[dict],
     base_url: str | None = None,
     tools: list[dict] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     max_tokens: int | None = None,
     timeout: float = 120.0,
 ) -> dict:
@@ -1960,7 +1991,7 @@ async def chat_stream(
     messages: list[dict],
     base_url: str | None = None,
     tools: list[dict] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     max_tokens: int | None = None,
     timeout: float = 120.0,
     on_chunk: ChunkCallback | None = None,

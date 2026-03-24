@@ -8,6 +8,7 @@ the agent uses Jira, Confluence, and Compass via the Atlassian Rovo MCP server.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -181,19 +182,19 @@ async def _sync_atlassian_tools_for_agent(agent_id: uuid.UUID, api_key: str) -> 
     from app.database import async_session
     from sqlalchemy import select as sa_select
 
-    print(f"[AtlassianChannel] Syncing tools for agent {agent_id} ...", flush=True)
+    logger.info(f"[AtlassianChannel] Syncing tools for agent {agent_id} ...")
     try:
         client = MCPClient(ATLASSIAN_MCP_URL, api_key=api_key)
         tools_discovered = await client.list_tools()
     except Exception as e:
-        print(f"[AtlassianChannel] ⚠️ Could not list tools: {e}", flush=True)
+        logger.error(f"[AtlassianChannel] Could not list tools: {e}")
         return
 
     if not tools_discovered:
-        print("[AtlassianChannel] ⚠️ No tools returned from Atlassian MCP", flush=True)
+        logger.warning("[AtlassianChannel] No tools returned from Atlassian MCP")
         return
 
-    print(f"[AtlassianChannel] Found {len(tools_discovered)} tools, assigning to agent {agent_id}", flush=True)
+    logger.info(f"[AtlassianChannel] Found {len(tools_discovered)} tools, assigning to agent {agent_id}")
 
     async with async_session() as db:
         assigned = 0
@@ -264,7 +265,7 @@ async def _sync_atlassian_tools_for_agent(agent_id: uuid.UUID, api_key: str) -> 
                 assigned += 1
 
         await db.commit()
-    print(f"[AtlassianChannel] ✅ {assigned} new tool assignments for agent {agent_id}", flush=True)
+    logger.info(f"[AtlassianChannel] {assigned} new tool assignments for agent {agent_id}")
 
 
 async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID, db=None) -> str | None:

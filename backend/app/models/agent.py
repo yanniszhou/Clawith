@@ -96,7 +96,7 @@ class Agent(Base):
 
     # Heartbeat (proactive agent awareness)
     heartbeat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    heartbeat_interval_minutes: Mapped[int] = mapped_column(Integer, default=120)
+    heartbeat_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     heartbeat_active_hours: Mapped[str] = mapped_column(String(20), default="09:00-18:00")
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -111,6 +111,11 @@ class Agent(Base):
 
     # Relationships
     creator: Mapped["User"] = relationship("User", back_populates="created_agents", foreign_keys=[creator_id])
+
+    @property
+    def has_api_key(self) -> bool:
+        """Whether this agent has an API key configured."""
+        return bool(self.api_key_hash)
     permissions: Mapped[list["AgentPermission"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     tasks: Mapped[list["Task"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     channel_config: Mapped["ChannelConfig | None"] = relationship(back_populates="agent", uselist=False)

@@ -7,13 +7,14 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.vscode/
 venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
 *.db
 .DS_Store
-
+.gstack/
 # Runtime agent data
 backend/data/
 backend/agent_data/

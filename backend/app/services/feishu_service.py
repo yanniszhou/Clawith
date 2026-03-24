@@ -72,14 +72,25 @@ class FeishuService:
         Returns (user, jwt_token)
         """
         open_id = feishu_user["open_id"]
+        user_id = feishu_user.get("user_id", "")
 
-        # Check if user already linked
-        result = await db.execute(select(User).where(User.feishu_open_id == open_id))
-        user = result.scalar_one_or_none()
+        # Prefer user_id (tenant-stable) for user lookup
+        user = None
+        if user_id:
+            result = await db.execute(select(User).where(User.feishu_user_id == user_id))
+            user = result.scalar_one_or_none()
+        if not user and open_id:
+            result = await db.execute(select(User).where(User.feishu_open_id == open_id))
+            user = result.scalar_one_or_none()
 
         if user:
             # Existing user — update info
             user.avatar_url = feishu_user.get("avatar_url") or user.avatar_url
+            # Always update IDs to latest values
+            if open_id:
+                user.feishu_open_id = open_id
+            if user_id:
+                user.feishu_user_id = user_id
             token = create_access_token(str(user.id), user.role)
             return user, token
 
@@ -204,6 +215,46 @@ class FeishuService:
                 oid = u.get("user_id")
                 if oid:
                     return oid
+            return None
+
+    async def resolve_user_id(self, app_id: str, app_secret: str,
+                               email: str | None = None, mobile: str | None = None) -> str | None:
+        """Resolve a user's tenant-level user_id using email or mobile.
+
+        Unlike open_id, user_id is stable across all apps within the same tenant.
+        Requires contact:user.employee_id:readonly permission.
+        """
+        if not email and not mobile:
+            return None
+
+        async with httpx.AsyncClient() as client:
+            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
+                "app_id": app_id,
+                "app_secret": app_secret,
+            })
+            app_token = token_resp.json().get("app_access_token", "")
+
+            body: dict = {}
+            if email:
+                body["emails"] = [email]
+            if mobile:
+                body["mobiles"] = [mobile]
+
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/contact/v3/users/batch_get_id",
+                json=body,
+                headers={"Authorization": f"Bearer {app_token}"},
+                params={"user_id_type": "user_id"},
+            )
+            data = resp.json()
+            if data.get("code") != 0:
+                return None
+
+            user_list = data.get("data", {}).get("user_list", [])
+            for u in user_list:
+                uid = u.get("user_id")
+                if uid:
+                    return uid
             return None
 
     async def send_approval_card(self, app_id: str, app_secret: str,

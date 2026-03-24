@@ -3,11 +3,11 @@
 Pulls departments and members from Feishu Contact API and upserts into local DB.
 """
 
-import logging
 import uuid
 from datetime import datetime, timezone
 
 import httpx
+from loguru import logger
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +16,6 @@ from app.models.org import OrgDepartment, OrgMember
 from app.models.system_settings import SystemSetting
 from app.models.user import User
 from app.core.security import hash_password
-
-logger = logging.getLogger(__name__)
 
 FEISHU_APP_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 FEISHU_DEPT_CHILDREN_URL = "https://open.feishu.cn/open-apis/contact/v3/departments"
@@ -37,17 +35,19 @@ class OrgSyncService:
             return None
         return setting.value
 
-    async def _get_app_token(self, app_id: str, app_secret: str) -> str:
-        """Get Feishu tenant_access_token (same as app_access_token for self-built apps)."""
+    async def _get_app_token(self, app_id: str, app_secret: str) -> tuple[str, dict]:
+        """Get Feishu tenant_access_token.
+        Returns (token_string, raw_response_dict).
+        """
         async with httpx.AsyncClient() as client:
             resp = await client.post(FEISHU_APP_TOKEN_URL, json={
                 "app_id": app_id,
                 "app_secret": app_secret,
             })
             data = resp.json()
-            print(f"[OrgSync] Token response: code={data.get('code')}, msg={data.get('msg')}")
+            logger.info(f"[OrgSync] Token response: code={data.get('code')}, msg={data.get('msg')}")
             token = data.get("tenant_access_token") or data.get("app_access_token") or ""
-            return token
+            return token, data
 
     async def _fetch_departments(self, token: str, parent_id: str = "0") -> list[dict]:
         """Recursively fetch all departments from Feishu."""
@@ -64,21 +64,21 @@ class OrgSyncService:
                 if page_token:
                     params["page_token"] = page_token
 
-                print(f"[OrgSync] GET {url} params={params}")
+                logger.info(f"[OrgSync] GET {url} params={params}")
                 resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
                 data = resp.json()
-                print(f"[OrgSync] Dept response: code={data.get('code')}, msg={data.get('msg')}, items={len(data.get('data', {}).get('items', []))}")
+                logger.info(f"[OrgSync] Dept response: code={data.get('code')}, msg={data.get('msg')}, items={len(data.get('data', {}).get('items', []))}")
 
                 if data.get("code") != 0:
-                    print(f"[OrgSync] Dept API error: {data}")
+                    logger.error(f"[OrgSync] Dept API error: {data}")
                     break
 
                 items = data.get("data", {}).get("items", [])
                 if items and not all_depts:  # Print first raw item for debugging
-                    print(f"[OrgSync] RAW first dept item keys: {list(items[0].keys())}")
-                    print(f"[OrgSync] RAW first dept item: {items[0]}")
+                    logger.info(f"[OrgSync] RAW first dept item keys: {list(items[0].keys())}")
+                    logger.info(f"[OrgSync] RAW first dept item: {items[0]}")
                 for item in items:
-                    print(f"[OrgSync]   dept: {item.get('name')} (id={item.get('open_department_id')})")
+                    logger.info(f"[OrgSync]   dept: {item.get('name')} (id={item.get('open_department_id')})")
                 all_depts.extend(items)
 
                 if not data.get("data", {}).get("has_more"):
@@ -87,7 +87,7 @@ class OrgSyncService:
 
         # If fetch_child=true didn't work (no items), try without recursion + manual recurse
         if not all_depts:
-            print(f"[OrgSync] fetch_child=true returned nothing, trying simple list...")
+            logger.info("[OrgSync] fetch_child=true returned nothing, trying simple list...")
             all_depts = await self._fetch_departments_simple(token, parent_id)
 
         return all_depts
@@ -104,10 +104,10 @@ class OrgSyncService:
                     params["page_token"] = page_token
                 resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
                 data = resp.json()
-                print(f"[OrgSync] Simple dept response (parent={parent_id}): code={data.get('code')}, items={len(data.get('data', {}).get('items', []))}")
+                logger.info(f"[OrgSync] Simple dept response (parent={parent_id}): code={data.get('code')}, items={len(data.get('data', {}).get('items', []))}")
 
                 if data.get("code") != 0:
-                    print(f"[OrgSync] Simple dept error: {data}")
+                    logger.error(f"[OrgSync] Simple dept error: {data}")
                     break
 
                 items = data.get("data", {}).get("items", [])
@@ -148,16 +148,16 @@ class OrgSyncService:
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 data = resp.json()
-                print(f"[OrgSync] Users response (dept={dept_id}): code={data.get('code')}, items={len(data.get('data', {}).get('items', []))}")
+                logger.info(f"[OrgSync] Users response (dept={dept_id}): code={data.get('code')}, items={len(data.get('data', {}).get('items', []))}")
 
                 if data.get("code") != 0:
-                    print(f"[OrgSync] Users API error: {data}")
+                    logger.error(f"[OrgSync] Users API error: {data}")
                     break
 
                 items = data.get("data", {}).get("items", [])
                 if items and not all_users:  # Print first raw user for debugging
-                    print(f"[OrgSync] RAW first user item keys: {list(items[0].keys())}")
-                    print(f"[OrgSync] RAW first user item: {items[0]}")
+                    logger.info(f"[OrgSync] RAW first user item keys: {list(items[0].keys())}")
+                    logger.info(f"[OrgSync] RAW first user item: {items[0]}")
                 all_users.extend(items)
                 if not data.get("data", {}).get("has_more"):
                     break
@@ -177,10 +177,12 @@ class OrgSyncService:
                 return {"error": "缺少 App ID 或 App Secret"}
 
             try:
-                token = await self._get_app_token(app_id, app_secret)
+                token, token_resp = await self._get_app_token(app_id, app_secret)
                 if not token:
-                    return {"error": "获取飞书 token 失败"}
-                print(f"[OrgSync] Got token: {token[:20]}...")
+                    feishu_code = token_resp.get("code", "?")
+                    feishu_msg = token_resp.get("msg", "unknown")
+                    return {"error": f"获取飞书 token 失败 (code={feishu_code}: {feishu_msg})"}
+                logger.info(f"[OrgSync] Got token: {token[:20]}...")
             except Exception as e:
                 return {"error": f"连接飞书失败: {str(e)[:100]}"}
 
@@ -199,7 +201,7 @@ class OrgSyncService:
             # --- Sync departments ---
             try:
                 depts = await self._fetch_departments(token, "0")
-                print(f"[OrgSync] Total departments fetched: {len(depts)}")
+                logger.info(f"[OrgSync] Total departments fetched: {len(depts)}")
 
                 for d in depts:
                     feishu_id = d.get("open_department_id", "")
@@ -265,17 +267,19 @@ class OrgSyncService:
                         if not open_id and not user_id:
                             logger.warning(f"[OrgSync] Skipping user with no open_id and no user_id: {u.get('name','?')}")
                             continue
+                        if not user_id:
+                            logger.warning(f"[OrgSync] User {u.get('name','?')} has no user_id — App may lack contact:user.employee_id:readonly permission")
 
-                        # Try to find existing member by open_id or user_id
+                        # Find existing member: prefer user_id (tenant-stable), fallback open_id
                         member = None
-                        if open_id:
-                            result = await db.execute(
-                                select(OrgMember).where(OrgMember.feishu_open_id == open_id)
-                            )
-                            member = result.scalar_one_or_none()
-                        if not member and user_id:
+                        if user_id:
                             result = await db.execute(
                                 select(OrgMember).where(OrgMember.feishu_user_id == user_id)
+                            )
+                            member = result.scalar_one_or_none()
+                        if not member and open_id:
+                            result = await db.execute(
+                                select(OrgMember).where(OrgMember.feishu_open_id == open_id)
                             )
                             member = result.scalar_one_or_none()
 
@@ -287,8 +291,8 @@ class OrgSyncService:
                             member.department_id = dept.id
                             member.department_path = dept.path or dept.name
                             member.phone = u.get("mobile", member.phone)
-                            # Only set open_id if not already present (avoid overwriting OAuth-set IDs)
-                            if open_id and not member.feishu_open_id:
+                            # Always update IDs to latest values
+                            if open_id:
                                 member.feishu_open_id = open_id
                             if user_id:
                                 member.feishu_user_id = user_id
@@ -314,15 +318,23 @@ class OrgSyncService:
                         member_count += 1
 
                         # --- Auto-create/update platform User ---
+                        # Prefer user_id (tenant-stable), then open_id, then email
                         platform_user = None
-                        if open_id:
+                        if user_id:
+                            pu_result = await db.execute(
+                                select(User).where(User.feishu_user_id == user_id)
+                            )
+                            platform_user = pu_result.scalar_one_or_none()
+                        if not platform_user and open_id:
                             pu_result = await db.execute(
                                 select(User).where(User.feishu_open_id == open_id)
                             )
                             platform_user = pu_result.scalar_one_or_none()
-                        if not platform_user and user_id:
+                        # Fallback: match by real email (most reliable cross-app identifier)
+                        member_email = u.get("email", "")
+                        if not platform_user and member_email and "@" in member_email and not member_email.endswith("@feishu.local"):
                             pu_result = await db.execute(
-                                select(User).where(User.feishu_user_id == user_id)
+                                select(User).where(User.email == member_email)
                             )
                             platform_user = pu_result.scalar_one_or_none()
 
@@ -330,16 +342,17 @@ class OrgSyncService:
                         if platform_user:
                             # Update existing user info
                             platform_user.display_name = member_name or platform_user.display_name
-                            if open_id and not platform_user.feishu_open_id:
+                            # Always update feishu IDs to track the current app's values
+                            if open_id:
                                 platform_user.feishu_open_id = open_id
-                            if user_id and not platform_user.feishu_user_id:
+                            if user_id:
                                 platform_user.feishu_user_id = user_id
                             if tenant_id and not platform_user.tenant_id:
                                 platform_user.tenant_id = tenant_id
                         else:
-                            # Create new user
+                            # Create new user — prefer user_id in username
                             username_base = f"feishu_{user_id or (open_id[:16] if open_id else uuid.uuid4().hex[:8])}"
-                            email = u.get("email") or f"{username_base}@feishu.local"
+                            email = member_email or f"{username_base}@feishu.local"
                             platform_user = User(
                                 username=username_base,
                                 email=email,
@@ -369,7 +382,7 @@ class OrgSyncService:
             await db.commit()
 
             stats = {"departments": dept_count, "members": member_count, "users_created": user_count, "synced_at": now.isoformat()}
-            print(f"[OrgSync] Complete: {stats}")
+            logger.info(f"[OrgSync] Complete: {stats}")
             return stats
 
 

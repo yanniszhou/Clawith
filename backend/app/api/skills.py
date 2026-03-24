@@ -1,8 +1,8 @@
 """Skills API — global skill registry CRUD."""
 
+import asyncio
 import base64
 import logging
-import os
 import re
 
 import httpx
@@ -13,7 +13,8 @@ from sqlalchemy.orm import selectinload
 
 from app.database import async_session
 from app.models.skill import Skill, SkillFile
-from app.core.security import require_role
+from app.core.security import require_role, get_current_user
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,46 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 
 CLAWHUB_BASE = "https://clawhub.ai/api"
 GITHUB_API = "https://api.github.com"
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
 MAX_SKILL_SIZE = 512_000  # 500 KB total limit per skill
+
+
+async def _get_tenant_setting(tenant_id: str | None, key: str) -> str:
+    """Resolve a tenant setting value: tenant_settings DB > empty."""
+    if tenant_id:
+        try:
+            from app.models.tenant_setting import TenantSetting
+            import uuid as _uid
+            async with async_session() as db:
+                result = await db.execute(
+                    select(TenantSetting).where(
+                        TenantSetting.tenant_id == _uid.UUID(tenant_id),
+                        TenantSetting.key == key,
+                    )
+                )
+                setting = result.scalar_one_or_none()
+                if setting and setting.value.get("token"):
+                    return setting.value["token"]
+        except Exception:
+            pass
+    return ""
+
+
+async def _get_github_token(tenant_id: str | None = None) -> str:
+    """Resolve GitHub token from tenant settings DB."""
+    return await _get_tenant_setting(tenant_id, "github_token")
+
+
+async def _get_clawhub_key(tenant_id: str | None = None) -> str:
+    """Resolve ClawHub API key from tenant settings DB."""
+    return await _get_tenant_setting(tenant_id, "clawhub_key")
+
+
+def _clawhub_headers(api_key: str) -> dict:
+    """Build request headers for ClawHub API calls."""
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {}
 
 
 class SkillFileIn(BaseModel):
@@ -101,14 +140,16 @@ def _parse_github_url(url: str) -> dict | None:
 
 async def _fetch_github_directory(
     owner: str, repo: str, path: str, branch: str = "main",
+    token: str = "",
 ) -> list[dict]:
     """Recursively fetch all files from a GitHub directory via API.
     Returns [{"path": relative_path, "content": text}].
     """
+    _token = token
     files: list[dict] = []
     total_size = 0
     max_depth = 3  # Prevent runaway recursion
-    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+    headers = {"Authorization": f"Bearer {_token}"} if _token else {}
 
     async def _recurse(dir_path: str, rel_prefix: str, depth: int = 0):
         nonlocal total_size
@@ -176,11 +217,18 @@ async def _save_skill_to_db(
     folder_name: str, name: str, description: str,
     category: str, icon: str, files: list[dict],
     source_url: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     """Create a Skill + SkillFile records in the database."""
+    import uuid as _uuid
     async with async_session() as db:
-        # Check for folder_name conflict
-        existing = await db.execute(select(Skill).where(Skill.folder_name == folder_name))
+        # Check for folder_name conflict (scoped by tenant)
+        conflict_q = select(Skill).where(Skill.folder_name == folder_name)
+        if tenant_id:
+            conflict_q = conflict_q.where(Skill.tenant_id == _uuid.UUID(tenant_id))
+        else:
+            conflict_q = conflict_q.where(Skill.tenant_id == None)
+        existing = await db.execute(conflict_q)
         if existing.scalar_one_or_none():
             raise HTTPException(
                 409, f"A skill with folder name '{folder_name}' already exists. "
@@ -194,12 +242,15 @@ async def _save_skill_to_db(
             icon=icon,
             folder_name=folder_name,
             is_builtin=False,
+            tenant_id=_uuid.UUID(tenant_id) if tenant_id else None,
         )
         db.add(skill)
         await db.flush()
 
         for f in files:
-            db.add(SkillFile(skill_id=skill.id, path=f["path"], content=f["content"]))
+            # PostgreSQL text columns cannot store null bytes
+            content = f["content"].replace("\x00", "") if f.get("content") else ""
+            db.add(SkillFile(skill_id=skill.id, path=f["path"], content=content))
 
         await db.commit()
         return {"id": str(skill.id), "name": skill.name, "folder_name": skill.folder_name}
@@ -209,10 +260,12 @@ async def _save_skill_to_db(
 
 
 @router.get("/clawhub/search")
-async def search_clawhub(q: str, _=Depends(require_role("platform_admin"))):
+async def search_clawhub(q: str, current_user: User = Depends(get_current_user)):
     """Proxy search requests to the ClawHub API."""
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    api_key = await _get_clawhub_key(tenant_id)
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(f"{CLAWHUB_BASE}/search", params={"q": q})
+        resp = await client.get(f"{CLAWHUB_BASE}/search", params={"q": q}, headers=_clawhub_headers(api_key))
         if resp.status_code != 200:
             raise HTTPException(502, f"ClawHub search failed: {resp.status_code}")
         data = resp.json()
@@ -229,11 +282,13 @@ async def search_clawhub(q: str, _=Depends(require_role("platform_admin"))):
 
 
 @router.get("/clawhub/detail/{slug}")
-async def clawhub_detail(slug: str, _=Depends(require_role("platform_admin"))):
+async def clawhub_detail(slug: str, current_user: User = Depends(get_current_user)):
     """Fetch full metadata for a skill from ClawHub."""
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    api_key = await _get_clawhub_key(tenant_id)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"{CLAWHUB_BASE}/v1/skills/{slug}")
+            resp = await client.get(f"{CLAWHUB_BASE}/v1/skills/{slug}", headers=_clawhub_headers(api_key))
             if resp.status_code == 404:
                 raise HTTPException(404, f"Skill '{slug}' not found on ClawHub")
             if resp.status_code == 429:
@@ -248,25 +303,39 @@ async def clawhub_detail(slug: str, _=Depends(require_role("platform_admin"))):
 
 
 @router.post("/clawhub/install")
-async def install_from_clawhub(body: ClawhubInstallIn, _=Depends(require_role("platform_admin"))):
+async def install_from_clawhub(body: ClawhubInstallIn, current_user: User = Depends(get_current_user)):
     """Install a skill from ClawHub into the global registry."""
+    # Resolve tenant GitHub token
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    token = await _get_github_token(tenant_id)
     slug = body.slug
 
-    # 1. Fetch metadata from ClawHub
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"{CLAWHUB_BASE}/v1/skills/{slug}")
-            if resp.status_code == 404:
-                raise HTTPException(404, f"Skill '{slug}' not found on ClawHub")
-            if resp.status_code == 429:
-                raise HTTPException(429, "ClawHub rate limit exceeded. Please wait a moment and try again.")
-            if resp.status_code != 200:
-                raise HTTPException(502, f"ClawHub API error: {resp.status_code}")
-            meta = resp.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(502, f"Failed to connect to ClawHub: {e}")
+    # 1. Fetch metadata from ClawHub (with retry for rate limits)
+    api_key = await _get_clawhub_key(tenant_id)
+    ch_headers = _clawhub_headers(api_key)
+    meta = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"{CLAWHUB_BASE}/v1/skills/{slug}", headers=ch_headers)
+                if resp.status_code == 404:
+                    raise HTTPException(404, f"Skill '{slug}' not found on ClawHub")
+                if resp.status_code == 429:
+                    if attempt < 2:
+                        await asyncio.sleep(1 + attempt)  # 1s, 2s backoff
+                        continue
+                    raise HTTPException(429, "ClawHub rate limit exceeded. Please wait a moment and try again.")
+                if resp.status_code != 200:
+                    raise HTTPException(502, f"ClawHub API error: {resp.status_code}")
+                meta = resp.json()
+                break
+        except HTTPException:
+            raise
+        except Exception as e:
+            if attempt < 2:
+                await asyncio.sleep(1)
+                continue
+            raise HTTPException(502, f"Failed to connect to ClawHub: {e}")
 
     skill_info = meta.get("skill", {})
     owner_info = meta.get("owner", {})
@@ -283,7 +352,7 @@ async def install_from_clawhub(body: ClawhubInstallIn, _=Depends(require_role("p
     # 3. Fetch files from GitHub archive
     github_path = f"skills/{handle}/{slug}"
     try:
-        files = await _fetch_github_directory("openclaw", "skills", github_path)
+        files = await _fetch_github_directory("openclaw", "skills", github_path, "main", token=token)
     except HTTPException as e:
         if e.status_code == 404:
             raise HTTPException(
@@ -315,9 +384,10 @@ async def install_from_clawhub(body: ClawhubInstallIn, _=Depends(require_role("p
         name=name,
         description=description,
         category=tier_labels.get(tier, "clawhub"),
-        icon="🌐",
+        icon="",
         files=files,
         source_url=f"https://clawhub.ai/skills/{slug}",
+        tenant_id=tenant_id,
     )
 
     result["tier"] = tier
@@ -330,8 +400,10 @@ async def install_from_clawhub(body: ClawhubInstallIn, _=Depends(require_role("p
 
 
 @router.post("/import-from-url")
-async def import_from_url(body: UrlImportIn, _=Depends(require_role("platform_admin"))):
+async def import_from_url(body: UrlImportIn, current_user: User = Depends(get_current_user)):
     """Import a skill from any GitHub URL into the global registry."""
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    token = await _get_github_token(tenant_id)
     parsed = _parse_github_url(body.url)
     if not parsed:
         raise HTTPException(400, "Invalid GitHub URL. Expected format: https://github.com/{owner}/{repo}/tree/{branch}/{path}")
@@ -339,7 +411,7 @@ async def import_from_url(body: UrlImportIn, _=Depends(require_role("platform_ad
     owner, repo, branch, path = parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
 
     # Fetch files
-    files = await _fetch_github_directory(owner, repo, path, branch)
+    files = await _fetch_github_directory(owner, repo, path, branch, token=token)
     if not files:
         raise HTTPException(404, "No files found at the specified path")
 
@@ -363,9 +435,10 @@ async def import_from_url(body: UrlImportIn, _=Depends(require_role("platform_ad
         name=name,
         description=description,
         category=tier_labels.get(tier, "url-import"),
-        icon="🔗",
+        icon="",
         files=files,
         source_url=body.url,
+        tenant_id=tenant_id,
     )
 
     result["tier"] = tier
@@ -375,15 +448,17 @@ async def import_from_url(body: UrlImportIn, _=Depends(require_role("platform_ad
 
 
 @router.post("/import-from-url/preview")
-async def preview_url_import(body: UrlImportIn, _=Depends(require_role("platform_admin"))):
+async def preview_url_import(body: UrlImportIn, current_user: User = Depends(get_current_user)):
     """Preview what will be imported from a GitHub URL without saving."""
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    token = await _get_github_token(tenant_id)
     parsed = _parse_github_url(body.url)
     if not parsed:
         raise HTTPException(400, "Invalid GitHub URL format")
 
     owner, repo, branch, path = parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
 
-    files = await _fetch_github_directory(owner, repo, path, branch)
+    files = await _fetch_github_directory(owner, repo, path, branch, token=token)
     if not files:
         raise HTTPException(404, "No files found at the specified path")
 
@@ -408,10 +483,11 @@ async def preview_url_import(body: UrlImportIn, _=Depends(require_role("platform
 
 
 @router.get("/")
-async def list_skills(tenant_id: str | None = None):
+async def list_skills(current_user: User = Depends(get_current_user)):
     """List global skills scoped by tenant (builtin + tenant-specific)."""
     import uuid as _uuid
     from sqlalchemy import or_ as _or
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     async with async_session() as db:
         query = select(Skill).order_by(Skill.name)
         # Scope by tenant: show builtin (tenant_id is NULL) + tenant-specific skills
@@ -545,16 +621,91 @@ async def delete_skill(skill_id: str, _=Depends(require_role("platform_admin")))
         return {"ok": True}
 
 
+# ─── Tenant GitHub Token Settings ───────────────────────────
+
+
+class SkillSettingsIn(BaseModel):
+    github_token: str | None = None
+    clawhub_key: str | None = None
+
+
+async def _upsert_tenant_setting(tenant_id, key: str, value: str):
+    """Helper to upsert a tenant setting."""
+    from app.models.tenant_setting import TenantSetting
+    async with async_session() as db:
+        result = await db.execute(
+            select(TenantSetting).where(
+                TenantSetting.tenant_id == tenant_id,
+                TenantSetting.key == key,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.value = {"token": value}
+        else:
+            db.add(TenantSetting(
+                tenant_id=tenant_id,
+                key=key,
+                value={"token": value},
+            ))
+        await db.commit()
+
+
+def _mask_token(token: str) -> str:
+    if token and len(token) > 8:
+        return f"{token[:4]}...{token[-4:]}"
+    return "****" if token else ""
+
+
+@router.get("/settings/token")
+async def get_skill_token_status(
+    current_user=Depends(require_role("platform_admin")),
+):
+    """Check if GitHub token and ClawHub key are configured for this tenant."""
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
+    gh_token = await _get_github_token(tenant_id)
+    ch_key = await _get_clawhub_key(tenant_id)
+    return {
+        "configured": bool(gh_token),
+        "source": "tenant" if tenant_id else "env",
+        "masked": _mask_token(gh_token),
+        "clawhub_configured": bool(ch_key),
+        "clawhub_masked": _mask_token(ch_key),
+    }
+
+
+@router.put("/settings/token")
+async def set_skill_token(
+    body: SkillSettingsIn,
+    current_user=Depends(require_role("platform_admin")),
+):
+    """Save GitHub token and/or ClawHub key for this tenant."""
+    if not current_user.tenant_id:
+        raise HTTPException(400, "No tenant associated")
+
+    if body.github_token is not None:
+        await _upsert_tenant_setting(current_user.tenant_id, "github_token", body.github_token)
+    if body.clawhub_key is not None:
+        await _upsert_tenant_setting(current_user.tenant_id, "clawhub_key", body.clawhub_key)
+    return {"ok": True}
+
+
 # ─── Path-based browse endpoints for FileBrowser ───────────
 
 
 @router.get("/browse/list")
-async def browse_list(path: str = ""):
+async def browse_list(path: str = "", current_user: User = Depends(get_current_user)):
     """List skill folders (root) or files/subdirs within a skill folder."""
+    import uuid as _uuid
+    from sqlalchemy import or_ as _or
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     async with async_session() as db:
         if not path or path == "/":
-            # Root: list all skill folders
-            result = await db.execute(select(Skill).order_by(Skill.name))
+            # Root: list all skill folders (scoped by tenant)
+            query = select(Skill).order_by(Skill.name)
+            if tenant_id:
+                query = query.where(_or(Skill.tenant_id == None, Skill.tenant_id == _uuid.UUID(tenant_id)))
+            result = await db.execute(query)
             skills = result.scalars().all()
             return [
                 {"name": s.folder_name, "path": s.folder_name, "is_dir": True, "size": 0}
@@ -564,9 +715,11 @@ async def browse_list(path: str = ""):
         # Inside a skill folder — resolve the skill and relative subpath
         clean = path.strip("/")
         folder = clean.split("/")[0]
-        result = await db.execute(
-            select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
-        )
+        # Resolve skill folder scoped by tenant
+        skill_q = select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
+        if tenant_id:
+            skill_q = skill_q.where(_or(Skill.tenant_id == None, Skill.tenant_id == _uuid.UUID(tenant_id)))
+        result = await db.execute(skill_q)
         skill = result.scalar_one_or_none()
         if not skill:
             return []
@@ -601,16 +754,20 @@ async def browse_list(path: str = ""):
 
 
 @router.get("/browse/read")
-async def browse_read(path: str):
+async def browse_read(path: str, current_user: User = Depends(get_current_user)):
     """Read a file from a skill folder."""
+    import uuid as _uuid
+    from sqlalchemy import or_ as _or
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     parts = path.strip("/").split("/", 1)
     if len(parts) < 2:
         raise HTTPException(400, "Path must include folder and file")
     folder, file_path = parts
     async with async_session() as db:
-        result = await db.execute(
-            select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
-        )
+        skill_q = select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
+        if tenant_id:
+            skill_q = skill_q.where(_or(Skill.tenant_id == None, Skill.tenant_id == _uuid.UUID(tenant_id)))
+        result = await db.execute(skill_q)
         skill = result.scalar_one_or_none()
         if not skill:
             raise HTTPException(404, "Skill not found")
@@ -626,26 +783,31 @@ class BrowseWriteIn(BaseModel):
 
 
 @router.put("/browse/write")
-async def browse_write(body: BrowseWriteIn, _=Depends(require_role("platform_admin"))):
+async def browse_write(body: BrowseWriteIn, current_user: User = Depends(require_role("platform_admin"))):
     """Write a file in a skill folder. Creates the skill if the folder doesn't exist."""
+    import uuid as _uuid
+    from sqlalchemy import or_ as _or
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     parts = body.path.strip("/").split("/", 1)
     if len(parts) < 2:
         raise HTTPException(400, "Path must include folder and file")
     folder, file_path = parts
     async with async_session() as db:
-        result = await db.execute(
-            select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
-        )
+        skill_q = select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
+        if tenant_id:
+            skill_q = skill_q.where(_or(Skill.tenant_id == None, Skill.tenant_id == _uuid.UUID(tenant_id)))
+        result = await db.execute(skill_q)
         skill = result.scalar_one_or_none()
         if not skill:
-            # Auto-create skill from folder name
+            # Auto-create skill from folder name, scoped to tenant
             skill = Skill(
                 name=folder.replace("-", " ").title(),
                 description="",
                 category="custom",
-                icon="📋",
+                icon="--",
                 folder_name=folder,
                 is_builtin=False,
+                tenant_id=current_user.tenant_id,
             )
             db.add(skill)
             await db.flush()
@@ -665,14 +827,18 @@ async def browse_write(body: BrowseWriteIn, _=Depends(require_role("platform_adm
 
 
 @router.delete("/browse/delete")
-async def browse_delete(path: str, _=Depends(require_role("platform_admin"))):
+async def browse_delete(path: str, current_user: User = Depends(require_role("platform_admin"))):
     """Delete a file or an entire skill folder."""
+    import uuid as _uuid
+    from sqlalchemy import or_ as _or
+    tenant_id = str(current_user.tenant_id) if current_user.tenant_id else None
     parts = path.strip("/").split("/", 1)
     folder = parts[0]
     async with async_session() as db:
-        result = await db.execute(
-            select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
-        )
+        skill_q = select(Skill).where(Skill.folder_name == folder).options(selectinload(Skill.files))
+        if tenant_id:
+            skill_q = skill_q.where(_or(Skill.tenant_id == None, Skill.tenant_id == _uuid.UUID(tenant_id)))
+        result = await db.execute(skill_q)
         skill = result.scalar_one_or_none()
         if not skill:
             raise HTTPException(404, "Skill not found")

@@ -9,16 +9,14 @@ Runs as a background task inside the FastAPI process.
 """
 
 import asyncio
-import logging
 from datetime import datetime, timezone, timedelta
 
+from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session
 from app.models.task import Task, TaskLog
 from app.models.agent import Agent
-
-logger = logging.getLogger(__name__)
 
 # Schedule JSON format:
 # {"freq": "daily"|"weekly", "interval": N, "time": "HH:MM", "weekdays": [0-6]}
@@ -147,7 +145,7 @@ async def _get_agent_reply(target_agent, message: str, db) -> str | None:
     try:
         response = await client.complete(
             messages=messages,
-            temperature=0.7,
+            temperature=model.temperature,
             max_tokens=512,
         )
         content = (response.content or "").strip()
@@ -343,7 +341,7 @@ async def _send_supervision_reminder(task: Task, agent_name: str):
 
 async def _supervision_tick():
     """One tick: check all supervision tasks and send due reminders."""
-    print("[supervision] tick running...", flush=True)
+    logger.info("[supervision] tick running...")
     from app.services.audit_logger import write_audit_log
 
     try:
@@ -359,7 +357,7 @@ async def _supervision_tick():
                 )
             )
             rows = result.all()
-            print(f"[supervision] found {len(rows)} supervision tasks", flush=True)
+            logger.info(f"[supervision] found {len(rows)} supervision tasks")
 
             await write_audit_log("supervision_tick", {"tasks_found": len(rows)})
 
@@ -376,7 +374,7 @@ async def _supervision_tick():
                     last_reminded = last_log.created_at if last_log else None
 
                     if _is_reminder_due(task.remind_schedule, last_reminded, now):
-                        print(f"[supervision] FIRING reminder for '{task.title}' -> {task.supervision_target_name}", flush=True)
+                        logger.info(f"[supervision] FIRING reminder for '{task.title}' -> {task.supervision_target_name}")
                         await write_audit_log(
                             "supervision_fire",
                             {"task_id": str(task.id), "title": task.title, "target": task.supervision_target_name},
@@ -394,7 +392,7 @@ async def _supervision_tick():
 
 async def start_supervision_reminder():
     """Start the background supervision reminder loop. Call from FastAPI startup."""
-    print("📋 [supervision] Reminder service started (60s tick)", flush=True)
+    logger.info("📋 [supervision] Reminder service started (60s tick)")
     logger.info("📋 Supervision reminder service started (60s tick)")
     while True:
         await _supervision_tick()

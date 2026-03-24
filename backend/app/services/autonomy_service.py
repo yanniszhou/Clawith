@@ -7,10 +7,10 @@ Implements the three-level autonomy system:
 """
 
 import json
-import logging
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +19,6 @@ from app.models.audit import ApprovalRequest, AuditLog
 from app.models.channel_config import ChannelConfig
 from app.models.user import User
 from app.services.feishu_service import feishu_service
-
-logger = logging.getLogger(__name__)
 
 
 class AutonomyService:
@@ -229,11 +227,14 @@ class AutonomyService:
                 select(User).where(User.id == agent.creator_id)
             )
             creator = creator_result.scalar_one_or_none()
-            if creator and creator.feishu_open_id:
+            if creator and (creator.feishu_user_id or creator.feishu_open_id):
+                receive_id = creator.feishu_user_id or creator.feishu_open_id
+                id_type = "user_id" if creator.feishu_user_id else "open_id"
                 await feishu_service.send_message(
                     channel.app_id, channel.app_secret,
-                    creator.feishu_open_id, "text",
-                    json.dumps({"text": f"[{agent.name}] executed: {action_type}"})
+                    receive_id, "text",
+                    json.dumps({"text": f"[{agent.name}] executed: {action_type}"}),
+                    receive_id_type=id_type,
                 )
 
     async def _request_approval(self, db: AsyncSession, agent: Agent,
@@ -262,10 +263,11 @@ class AutonomyService:
                 select(User).where(User.id == agent.creator_id)
             )
             creator = creator_result.scalar_one_or_none()
-            if creator and creator.feishu_open_id:
+            if creator and (creator.feishu_user_id or creator.feishu_open_id):
+                receive_id = creator.feishu_user_id or creator.feishu_open_id
                 await feishu_service.send_approval_card(
                     channel.app_id, channel.app_secret,
-                    creator.feishu_open_id,
+                    receive_id,
                     agent.name, approval.action_type,
                     json.dumps(approval.details, ensure_ascii=False),
                     str(approval.id),

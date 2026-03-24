@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import json
-import logging
 import os
 import time
 import uuid
@@ -11,6 +10,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,6 @@ from pathlib import Path as _Path
 import asyncio as _asyncio
 import random as _random
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter(tags=["microsoft_teams"])

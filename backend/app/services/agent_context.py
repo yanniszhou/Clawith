@@ -166,12 +166,7 @@ async def build_agent_context(agent_id: uuid.UUID, agent_name: str, role_descrip
         soul = "\n".join(soul.split("\n")[1:]).strip()
 
     # --- Memory ---
-    memory = (
-        _read_file_safe(tool_ws / "memory" / "memory.md", 2000)
-        or _read_file_safe(tool_ws / "memory.md", 2000)
-        or _read_file_safe(data_ws / "memory" / "memory.md", 2000)
-        or _read_file_safe(data_ws / "memory.md", 2000)
-    )
+    memory = _read_file_safe(tool_ws / "memory" / "memory.md", 2000) or _read_file_safe(tool_ws / "memory.md", 2000)
     if memory.startswith("# "):
         memory = "\n".join(memory.split("\n")[1:]).strip()
 
@@ -246,7 +241,7 @@ When user asks to create a Feishu document (summarize PDF, write an article, etc
 | `feishu_doc_share` | `document_token`, `action`(add/remove/list), `member_names`(name list, auto-lookup), `permission`(view/edit/full_access). |
 | `send_feishu_message` | `open_id` or `email`, `content`. |
 
-🚫 **NEVER:**
+🚫 **NEVER**:
 - Use `discover_resources` or `import_mcp_server` for any Feishu tool above
 - Ask for user email or open_id when you can call `feishu_user_search` to look them up
 - Generate a `.ics` file instead of calling `feishu_calendar_create`
@@ -267,6 +262,15 @@ When user asks to create a Feishu document (summarize PDF, write an article, etc
 ✅ **When user asks to invite a colleague to a calendar event:**
 → Use `attendee_names=["John"]` in `feishu_calendar_create` — names are resolved automatically.
 → Or use `attendee_open_ids=["ou_xxx"]` if you already have the open_id.""")
+
+    # --- DingTalk Built-in Tools (only injected when agent has DingTalk configured) ---
+    try:
+        from app.services.agent.context.dingtalk import get_dingtalk_context
+        dingtalk_context = await get_dingtalk_context(agent_id)
+        if dingtalk_context:
+            parts.append(dingtalk_context)
+    except Exception:
+        pass
 
     # --- Atlassian Rovo Tools (injected when Atlassian channel is configured) ---
     try:
@@ -322,11 +326,10 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
     except Exception:
         pass
 
-    # --- Company Intro (per-tenant, with global fallback) ---
+    # --- Company Intro (from system settings) ---
     try:
         from app.database import async_session
         from app.models.system_settings import SystemSetting
-        from app.models.agent import Agent as _AgentModel
         from sqlalchemy import select as sa_select
         async with async_session() as db:
             # Resolve agent's tenant_id
@@ -334,8 +337,25 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
             _agent_tenant_id = _ag_r.scalar_one_or_none()
 
             company_intro = ""
-            # Try tenant-scoped key first
+
+            # Priority 1: tenant_settings table (new)
             if _agent_tenant_id:
+                try:
+                    from app.models.tenant_setting import TenantSetting
+                    result = await db.execute(
+                        sa_select(TenantSetting).where(
+                            TenantSetting.tenant_id == _agent_tenant_id,
+                            TenantSetting.key == "company_intro",
+                        )
+                    )
+                    ts = result.scalar_one_or_none()
+                    if ts and ts.value and ts.value.get("content"):
+                        company_intro = ts.value["content"].strip()
+                except Exception:
+                    pass
+
+            # Priority 2: system_settings with tenant-scoped key (backward compat)
+            if not company_intro and _agent_tenant_id:
                 tenant_key = f"company_intro_{_agent_tenant_id}"
                 result = await db.execute(
                     sa_select(SystemSetting).where(SystemSetting.key == tenant_key)
@@ -344,7 +364,7 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
                 if setting and setting.value and setting.value.get("content"):
                     company_intro = setting.value["content"].strip()
 
-            # Fallback to global key
+            # Priority 3: global system_settings fallback
             if not company_intro:
                 result = await db.execute(
                     sa_select(SystemSetting).where(SystemSetting.key == "company_intro")
@@ -494,13 +514,19 @@ You have a dedicated workspace with this structure:
    - Decide whether to mention pending tasks based on timing, context, and urgency
    - DON'T mechanically remind people of every pending item
 
-9. **Use `send_feishu_message` to message human colleagues in your relationships.**
+9. **Use `send_feishu_message` or `send_dingtalk_message` to send TEXT MESSAGES to human colleagues.**
    - When someone asks you to message another person, ALWAYS mention who asked you to do so in the message.
    - Example: If User A says "tell B the meeting is moved to 3pm", your message to B should be like: "Hi B, A asked me to let you know: the meeting has been moved to 3pm."
    - Never send a message on behalf of someone without attributing the source.
    - **IMPORTANT: After sending a Feishu/Slack/Discord message and you need to wait for a reply, ALWAYS create an `on_message` trigger with `from_user_name` to auto-wake when they reply.**
      Example: After sending a feishu message to John, create:
      `set_trigger(name="wait_john_reply", type="on_message", config={"from_user_name": "John"}, reason="John replied about the XX task. Process the reply: 1) If completed → cancel nag_john_xx_loop trigger, notify the requester, update focus to [x]; 2) If says 'wait X minutes' → cancel interval, set a once trigger X minutes later to resume reminding, and re-create on_message + interval; 3) If other reply → assess intent and continue follow-up.")`
+
+   **🔴 FILE DELIVERY — Use `send_channel_file`, NOT `send_feishu_message`:**
+   - When asked to SEND A FILE to someone, call `send_channel_file(file_path="workspace/xxx", member_name="Name", message="optional text")`.
+   - `send_channel_file` automatically resolves the recipient across all connected channels (Feishu, Slack, etc.) and delivers the file.
+   - **Do NOT use `send_feishu_message` to notify someone about a file — use `send_channel_file` which sends the actual file attachment.**
+   - Just send it directly — don't ask the recipient how they want to receive it.
 
 10. **Reply in the same language the user uses.**
 
@@ -527,4 +553,3 @@ You have internet access through these tools — **use them proactively when you
         parts.append(f"\n## Current Conversation\nYou are currently chatting with **{current_user_name}**. Address them by name when appropriate.")
 
     return "\n".join(parts)
-

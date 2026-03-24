@@ -6,6 +6,7 @@ Provides Config CRUD and message handling for DingTalk bots using Stream mode.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -147,7 +148,7 @@ async def process_dingtalk_message(
         agent_r = await db.execute(_select(AgentModel).where(AgentModel.id == agent_id))
         agent_obj = agent_r.scalar_one_or_none()
         if not agent_obj:
-            print(f"[DingTalk] Agent {agent_id} not found")
+            logger.warning(f"[DingTalk] Agent {agent_id} not found")
             return
         creator_id = agent_obj.creator_id
         ctx_size = agent_obj.context_window_size if agent_obj else 20
@@ -212,7 +213,7 @@ async def process_dingtalk_message(
             db, agent_id, user_text,
             history=history, user_id=platform_user_id,
         )
-        print(f"[DingTalk] LLM reply: {reply_text[:100]}")
+        logger.info(f"[DingTalk] LLM reply: {reply_text[:100]}")
 
         # Reply via session webhook (markdown)
         try:
@@ -225,7 +226,7 @@ async def process_dingtalk_message(
                     },
                 })
         except Exception as e:
-            print(f"[DingTalk] Failed to reply via webhook: {e}")
+            logger.error(f"[DingTalk] Failed to reply via webhook: {e}")
             # Fallback: try plain text
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -234,7 +235,7 @@ async def process_dingtalk_message(
                         "text": {"content": reply_text},
                     })
             except Exception as e2:
-                print(f"[DingTalk] Fallback text reply also failed: {e2}")
+                logger.error(f"[DingTalk] Fallback text reply also failed: {e2}")
 
         # Save assistant reply
         db.add(ChatMessage(

@@ -4,6 +4,8 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
+
 from sqlalchemy import text
 
 from app.database import async_session
@@ -45,4 +47,4 @@ async def write_audit_log(
             await db.commit()
     except Exception as e:
         # Never let audit logging break the caller
-        print(f"[audit_logger] WARNING: failed to write audit log: {e}", flush=True)
+        logger.error(f"[audit_logger] WARNING: failed to write audit log: {e}")

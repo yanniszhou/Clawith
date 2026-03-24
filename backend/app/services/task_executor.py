@@ -6,18 +6,16 @@ as the chat dialog. Supports tool-calling loop for autonomous execution.
 
 import asyncio
 import json
-import logging
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session
 from app.models.agent import Agent
 from app.models.llm import LLMModel
 from app.models.task import Task, TaskLog
-
-logger = logging.getLogger(__name__)
 
 
 async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
@@ -30,14 +28,14 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
       - todo tasks: pending → doing → done
       - supervision tasks: pending → doing → pending (stays active, just logs result)
     """
-    print(f"[TaskExec] Starting task {task_id} for agent {agent_id}")
+    logger.info(f"[TaskExec] Starting task {task_id} for agent {agent_id}")
 
     # Step 1: Mark as doing
     async with async_session() as db:
         result = await db.execute(select(Task).where(Task.id == task_id))
         task = result.scalar_one_or_none()
         if not task:
-            print(f"[TaskExec] Task {task_id} not found")
+            logger.warning(f"[TaskExec] Task {task_id} not found")
             return
 
         task.status = "doing"
@@ -147,7 +145,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
     tools_for_llm = await get_agent_tools_for_llm(agent_id)
 
     try:
-        print(f"[TaskExec] Calling LLM with tools for task: {task_title}")
+        logger.info(f"[TaskExec] Calling LLM with tools for task: {task_title}")
         reply = ""
 
         # Tool-calling loop (max 50 rounds for task execution)
@@ -156,7 +154,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
                 response = await client.complete(
                     messages=messages,
                     tools=tools_for_llm if tools_for_llm else None,
-                    temperature=0.7,
+                    temperature=model.temperature,
                     max_tokens=get_max_tokens(model.provider, model.model, getattr(model, 'max_output_tokens', None)),
                 )
             except LLMError as e:
@@ -187,7 +185,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
                     fn = tc["function"]
                     tool_name = fn["name"]
                     raw_args = fn.get("arguments", "{}")
-                    print(f"[TaskExec] Round {round_i+1} calling tool: {tool_name}({json.dumps(raw_args, ensure_ascii=False)[:100]})")
+                    logger.info(f"[TaskExec] Round {round_i+1} calling tool: {tool_name}({json.dumps(raw_args, ensure_ascii=False)[:100]})")
                     try:
                         args = json.loads(raw_args) if raw_args else {}
                     except Exception:
@@ -206,10 +204,10 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
             reply = "(已达到最大工具调用轮数)"
 
         await client.close()
-        print(f"[TaskExec] LLM reply: {reply[:80]}")
+        logger.info(f"[TaskExec] LLM reply: {reply[:80]}")
     except Exception as e:
         error_msg = str(e) or repr(e)
-        print(f"[TaskExec] Error: {error_msg}")
+        logger.error(f"[TaskExec] Error: {error_msg}")
         await _log_error(task_id, f"执行出错: {error_msg[:150]}")
         if task_type == 'supervision':
             await _restore_supervision_status(task_id)
@@ -229,7 +227,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
                 task.completed_at = datetime.now(timezone.utc)
                 db.add(TaskLog(task_id=task_id, content=f"✅ 任务完成\n\n{reply}"))
             await db.commit()
-            print(f"[TaskExec] Task {task_id} {'logged' if task_type == 'supervision' else 'completed'}!")
+            logger.info(f"[TaskExec] Task {task_id} {'logged' if task_type == 'supervision' else 'completed'}!")
 
     # Log activity
     from app.services.activity_logger import log_activity
@@ -243,7 +241,7 @@ You are now in TASK EXECUTION MODE (not a conversation). A task has been assigne
 
 async def _log_error(task_id: uuid.UUID, message: str) -> None:
     """Add an error log to the task."""
-    print(f"[TaskExec] Error for {task_id}: {message}")
+    logger.error(f"[TaskExec] Error for {task_id}: {message}")
     async with async_session() as db:
         db.add(TaskLog(task_id=task_id, content=f"❌ {message}"))
         await db.commit()

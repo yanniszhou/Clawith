@@ -415,12 +415,16 @@ select:focus {
   position: relative;
 }
 
-.sidebar-agent-item.owned .sidebar-item {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 12%, transparent) 0%, transparent 70%);
-}
-
-.sidebar-agent-item.owned .sidebar-item:hover {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 20%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 5%, transparent) 70%);
+.sidebar-agent-item.owned .agent-avatar::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: -2px;
+  width: 7px;
+  height: 7px;
+  background: var(--accent-primary);
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-secondary);
 }
 
 .sidebar-pin-btn {
@@ -496,6 +500,7 @@ select:focus {
 .sidebar.collapsed .sidebar-item {
   justify-content: center;
   padding: var(--space-2) 0;
+  padding-right: 0 !important;
 }
 
 .sidebar.collapsed .sidebar-item-text {
@@ -685,6 +690,7 @@ select:focus {
 
 /* Agent avatar — sidebar letter icon */
 .agent-avatar {
+  position: relative;
   width: 20px;
   height: 20px;
   border-radius: 6px;
@@ -698,6 +704,28 @@ select:focus {
   flex-shrink: 0;
   line-height: 1;
   letter-spacing: -0.02em;
+}
+
+/* OpenClaw agent — dashed border to indicate external/connected */
+.agent-avatar.openclaw {
+  border: 1.5px dashed var(--text-tertiary);
+  background: transparent;
+}
+
+/* OpenClaw link icon — top-right of avatar */
+.agent-avatar-link {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
 }
 
 /* Small badge dot — absolute over avatar */
@@ -1511,7 +1539,7 @@ select:focus {
 }
 
 .wizard-step.completed {
-  color: var(--accent-text);
+  color: var(--success);
 }
 
 .wizard-step-number {

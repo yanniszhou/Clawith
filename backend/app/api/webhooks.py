@@ -7,17 +7,15 @@ can send events to, which triggers the corresponding agent.
 import hashlib
 import hmac
 import json
-import logging
 import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session
 from app.models.trigger import AgentTrigger
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 

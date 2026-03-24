@@ -1,17 +1,15 @@
 """Agent collaboration service — Agent-to-Agent communication."""
 
 import json
-import logging
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
 from app.models.audit import AuditLog
-
-logger = logging.getLogger(__name__)
 
 
 class CollaborationService:

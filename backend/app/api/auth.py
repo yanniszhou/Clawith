@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,8 +98,7 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
             from app.services.agent_seeder import seed_default_agents
             await seed_default_agents()
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to seed default agents: {e}")
+            logger.warning(f"Failed to seed default agents: {e}")
 
     needs_setup = tenant_uuid is None
     token = create_access_token(str(user.id), user.role)

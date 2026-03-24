@@ -13,19 +13,17 @@ Every 15 seconds:
 import asyncio
 import ipaddress
 import json as _json
-import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
 from croniter import croniter
+from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session
 from app.models.trigger import AgentTrigger
 from app.models.agent import Agent
-
-logger = logging.getLogger(__name__)
 
 TICK_INTERVAL = 15  # seconds
 DEDUP_WINDOW = 30   # seconds — same agent won't be invoked twice within this window
@@ -481,7 +479,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
                         _tc_db.add(ChatMessage(
                             agent_id=agent_id,
                             conversation_id=str(session_id),
-                            role="tool_result",
+                            role="tool_call",
                             content=_json.dumps({"name": data["name"], "result": result_str}, ensure_ascii=False, default=str),
                             user_id=agent.creator_id,
                             participant_id=agent_participant_id,
@@ -545,7 +543,7 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
 
                     if active_session_ids:
                         target_session_ids = active_session_ids
-                        print(f"[Trigger] Saving notification to {len(active_session_ids)} active session(s)")
+                        logger.info(f"[Trigger] Saving notification to {len(active_session_ids)} active session(s)")
                     else:
                         # Fallback: most recent web session for this agent
                         _sr = await db.execute(
@@ -563,9 +561,9 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
                         row = _sr.scalar_one_or_none()
                         if row:
                             target_session_ids = [str(row)]
-                            print(f"[Trigger] No active WS, saving to most recent session {row}")
+                            logger.info(f"[Trigger] No active WS, saving to most recent session {row}")
                         else:
-                            print(f"[Trigger] No web session found for agent {agent.name}")
+                            logger.warning(f"[Trigger] No web session found for agent {agent.name}")
 
                     for sid in target_session_ids:
                         db.add(ChatMessage(

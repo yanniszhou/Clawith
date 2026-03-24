@@ -1,16 +1,16 @@
-<h1 align="center">🦞 Clawith — OpenClaw for Teams</h1>
-
 <p align="center">
-  <em>OpenClaw empowers individuals.</em><br/>
-  <em>Clawith scales it to frontier organizations.</em>
+  <img src="assets/Clawith_slogan.png" alt="Clawith — OpenClaw for Teams" width="800" />
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License" />
-  <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python" />
-  <img src="https://img.shields.io/badge/React-19-61DAFB.svg" alt="React" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg" alt="FastAPI" />
-  <a href="https://discord.gg/3AKMBM2G"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License" /></a>
+  <a href="https://github.com/dataelement/Clawith/stargazers"><img src="https://img.shields.io/github/stars/dataelement/Clawith?style=flat&color=gold" alt="GitHub Stars" /></a>
+  <a href="https://github.com/dataelement/Clawith/network/members"><img src="https://img.shields.io/github/forks/dataelement/Clawith?style=flat&color=slateblue" alt="GitHub Forks" /></a>
+  <a href="https://github.com/dataelement/Clawith/commits/main"><img src="https://img.shields.io/github/last-commit/dataelement/Clawith?style=flat&color=green" alt="Last Commit" /></a>
+  <a href="https://github.com/dataelement/Clawith/graphs/contributors"><img src="https://img.shields.io/github/contributors/dataelement/Clawith?style=flat&color=orange" alt="Contributors" /></a>
+  <a href="https://github.com/dataelement/Clawith/issues"><img src="https://img.shields.io/github/issues/dataelement/Clawith?style=flat" alt="Issues" /></a>
+  <a href="https://x.com/ClawithHQ"><img src="https://img.shields.io/badge/𝕏-Follow-000000?logo=x&logoColor=white" alt="Follow on X" /></a>
+  <a href="https://discord.gg/NRNHZkyDcG"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
 </p>
 
 <p align="center">
@@ -200,7 +200,7 @@ Change default passwords · Set strong `SECRET_KEY` / `JWT_SECRET_KEY` · Enable
 
 ## 💬 Community
 
-Join our [Discord server](https://discord.gg/3AKMBM2G) to chat with the team, ask questions, share feedback, or just hang out!
+Join our [Discord server](https://discord.gg/NRNHZkyDcG) to chat with the team, ask questions, share feedback, or just hang out!
 
 You can also scan the QR code below to join our community on mobile:
 

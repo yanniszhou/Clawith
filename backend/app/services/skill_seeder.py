@@ -1,5 +1,6 @@
 """Seed builtin skills into the global skill registry."""
 
+from loguru import logger
 from sqlalchemy import select
 from app.database import async_session
 from app.models.skill import Skill, SkillFile
@@ -583,7 +584,7 @@ async def seed_skills():
             if mcp_file.exists():
                 s["files"] = [{"path": "SKILL.md", "content": mcp_file.read_text(encoding="utf-8")}]
             else:
-                print("[SkillSeeder] WARNING: MCP_INSTALLER.md not found in agent_template/skills/")
+                logger.warning("[SkillSeeder] MCP_INSTALLER.md not found in agent_template/skills/")
 
     async with async_session() as db:
         for skill_data in BUILTIN_SKILLS:
@@ -612,10 +613,10 @@ async def seed_skills():
                         existing_file = existing_paths[f["path"]]
                         if existing_file.content != f["content"]:
                             existing_file.content = f["content"]
-                            print(f"[SkillSeeder] Updated {f['path']} in {skill_data['name']}")
+                            logger.info(f"[SkillSeeder] Updated {f['path']} in {skill_data['name']}")
                     else:
                         db.add(SkillFile(skill_id=existing.id, path=f["path"], content=f["content"]))
-                        print(f"[SkillSeeder] Added file {f['path']} to {skill_data['name']}")
+                        logger.info(f"[SkillSeeder] Added file {f['path']} to {skill_data['name']}")
             else:
                 skill = Skill(
                     name=skill_data["name"],
@@ -630,9 +631,9 @@ async def seed_skills():
                 await db.flush()
                 for f in skill_data["files"]:
                     db.add(SkillFile(skill_id=skill.id, path=f["path"], content=f["content"]))
-                print(f"[SkillSeeder] Created skill: {skill_data['name']}")
+                logger.info(f"[SkillSeeder] Created skill: {skill_data['name']}")
         await db.commit()
-        print("[SkillSeeder] Skills seeded")
+        logger.info("[SkillSeeder] Skills seeded")
 
 
 async def push_default_skills_to_existing_agents():
@@ -682,9 +683,9 @@ async def push_default_skills_to_existing_agents():
                     else:
                         fp.write_text(sf.content, encoding="utf-8")
                         pushed += 1
-                        print(f"[SkillSeeder] Pushed '{skill.name}' to agent {agent.id}")
+                        logger.info(f"[SkillSeeder] Pushed '{skill.name}' to agent {agent.id}")
 
         if pushed or updated:
-            print(f"[SkillSeeder] Pushed {pushed} new + {updated} updated skill files to existing agents")
+            logger.info(f"[SkillSeeder] Pushed {pushed} new + {updated} updated skill files to existing agents")
         else:
-            print("[SkillSeeder] All existing agents already have up-to-date default skills")
+            logger.info("[SkillSeeder] All existing agents already have up-to-date default skills")

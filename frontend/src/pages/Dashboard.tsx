@@ -453,46 +453,48 @@ export default function Dashboard() {
                     {/* Stats Bar */}
                     <StatsBar agents={agents} allTasks={allTasks} />
 
-                    {/* Agent List Header */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    {/* Agent List Card */}
+                    <div style={{
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-lg)',
+                        overflow: 'hidden',
+                        marginBottom: '32px',
+                    }}>
+                        {/* Agent List Header */}
                         <div style={{
                             display: 'grid',
                             gridTemplateColumns: '220px 1fr 150px 100px',
-                            flex: 1,
-                            padding: '0 16px',
+                            padding: '10px 16px',
                             fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 500,
                             textTransform: 'uppercase' as const, letterSpacing: '0.05em',
+                            borderBottom: '1px solid var(--border-subtle)',
                         }}>
                             <span>{t('dashboard.table.agent')}</span>
                             <span>{t('dashboard.table.latestActivity')}</span>
                             <span>Token</span>
                             <span style={{ textAlign: 'right' }}>{t('dashboard.table.active')}</span>
                         </div>
-                    </div>
 
-
-                    {/* Divider */}
-                    <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '0 0 4px' }} />
-
-                    {/* Agent Rows */}
-                    <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '32px' }}>
-                        {agents
-                            .sort((a, b) => {
-                                const aActive = a.status === 'running' || a.status === 'idle' ? 1 : 0;
-                                const bActive = b.status === 'running' || b.status === 'idle' ? 1 : 0;
-                                if (aActive !== bActive) return bActive - aActive;
-                                const aTime = a.last_active_at ? new Date(a.last_active_at).getTime() : 0;
-                                const bTime = b.last_active_at ? new Date(b.last_active_at).getTime() : 0;
-                                return bTime - aTime;
-                            })
-                            .map(agent => (
-                                <AgentRow
-                                    key={agent.id}
-                                    agent={agent}
-                                    tasks={tasksByAgent.get(agent.id) || []}
-                                    recentActivity={agentActivities[agent.id] || []}
-                                />
-                            ))}
+                        {/* Agent Rows (scrollable) */}
+                        <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                            {agents
+                                .sort((a, b) => {
+                                    const aActive = a.status === 'running' || a.status === 'idle' ? 1 : 0;
+                                    const bActive = b.status === 'running' || b.status === 'idle' ? 1 : 0;
+                                    if (aActive !== bActive) return bActive - aActive;
+                                    const aTime = a.last_active_at ? new Date(a.last_active_at).getTime() : 0;
+                                    const bTime = b.last_active_at ? new Date(b.last_active_at).getTime() : 0;
+                                    return bTime - aTime;
+                                })
+                                .map(agent => (
+                                    <AgentRow
+                                        key={agent.id}
+                                        agent={agent}
+                                        tasks={tasksByAgent.get(agent.id) || []}
+                                        recentActivity={agentActivities[agent.id] || []}
+                                    />
+                                ))}
+                        </div>
                     </div>
 
                     {/* Recent Activity */}

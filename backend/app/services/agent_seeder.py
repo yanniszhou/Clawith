@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from loguru import logger
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -97,7 +99,7 @@ async def seed_default_agents():
             select(Agent).where(Agent.name.in_(["Morty", "Meeseeks"]))
         )
         if existing.scalars().first():
-            print("[AgentSeeder] Default agents already exist, skipping")
+            logger.info("[AgentSeeder] Default agents already exist, skipping")
             return
 
         # Get platform admin as creator
@@ -106,7 +108,7 @@ async def seed_default_agents():
         )
         admin = admin_result.scalar_one_or_none()
         if not admin:
-            print("[AgentSeeder] No platform admin found, skipping default agents")
+            logger.warning("[AgentSeeder] No platform admin found, skipping default agents")
             return
 
         # Create both agents
@@ -243,4 +245,4 @@ async def seed_default_agents():
         )
 
         await db.commit()
-        print(f"[AgentSeeder] Created default agents: Morty ({morty.id}), Meeseeks ({meeseeks.id})")
+        logger.info(f"[AgentSeeder] Created default agents: Morty ({morty.id}), Meeseeks ({meeseeks.id})")

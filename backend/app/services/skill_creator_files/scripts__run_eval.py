@@ -16,6 +16,8 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+from loguru import logger
+
 from scripts.utils import parse_skill_md
 
 
@@ -221,7 +223,7 @@ def run_eval(
             try:
                 query_triggers[query].append(future.result())
             except Exception as e:
-                print(f"Warning: query failed: {e}", file=sys.stderr)
+                logger.warning(f"Warning: query failed: {e}")
                 query_triggers[query].append(False)
 
     for query, triggers in query_triggers.items():
@@ -273,7 +275,7 @@ def main():
     skill_path = Path(args.skill_path)
 
     if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
+        logger.error(f"Error: No SKILL.md found at {skill_path}")
         sys.exit(1)
 
     name, original_description, content = parse_skill_md(skill_path)
@@ -281,7 +283,7 @@ def main():
     project_root = find_project_root()
 
     if args.verbose:
-        print(f"Evaluating: {description}", file=sys.stderr)
+        logger.info(f"Evaluating: {description}")
 
     output = run_eval(
         eval_set=eval_set,
@@ -297,11 +299,11 @@ def main():
 
     if args.verbose:
         summary = output["summary"]
-        print(f"Results: {summary['passed']}/{summary['total']} passed", file=sys.stderr)
+        logger.info(f"Results: {summary['passed']}/{summary['total']} passed")
         for r in output["results"]:
             status = "PASS" if r["pass"] else "FAIL"
             rate_str = f"{r['triggers']}/{r['runs']}"
-            print(f"  [{status}] rate={rate_str} expected={r['should_trigger']}: {r['query'][:70]}", file=sys.stderr)
+            logger.info(f"  [{status}] rate={rate_str} expected={r['should_trigger']}: {r['query'][:70]}")
 
     print(json.dumps(output, indent=2))
 

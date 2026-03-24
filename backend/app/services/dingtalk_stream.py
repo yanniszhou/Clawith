@@ -5,17 +5,15 @@ Uses the dingtalk-stream SDK to receive bot messages via persistent connections.
 """
 
 import asyncio
-import logging
 import threading
 import uuid
 from typing import Dict
 
+from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session
 from app.models.channel_config import ChannelConfig
-
-logger = logging.getLogger(__name__)
 
 
 class DingTalkStreamManager:
@@ -35,10 +33,10 @@ class DingTalkStreamManager:
     ):
         """Start a DingTalk Stream client for a specific agent."""
         if not app_key or not app_secret:
-            print(f"[DingTalk Stream] Missing credentials for {agent_id}, skipping", flush=True)
+            logger.warning(f"[DingTalk Stream] Missing credentials for {agent_id}, skipping")
             return
 
-        print(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)", flush=True)
+        logger.info(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)")
 
         # Capture the main event loop so threads can dispatch coroutines back
         if self._main_loop is None:
@@ -60,7 +58,7 @@ class DingTalkStreamManager:
         )
         self._threads[agent_id] = thread
         thread.start()
-        print(f"[DingTalk Stream] Client thread started for agent {agent_id}", flush=True)
+        logger.info(f"[DingTalk Stream] Client thread started for agent {agent_id}")
 
     def _run_client_thread(
         self,
@@ -101,9 +99,8 @@ class DingTalkStreamManager:
                         conversation_type = incoming.conversation_type or "1"
                         session_webhook = incoming.session_webhook or ""
 
-                        print(
-                            f"[DingTalk Stream] Message from {sender_staff_id}: {user_text[:80]}",
-                            flush=True,
+                        logger.info(
+                            f"[DingTalk Stream] Message from {sender_staff_id}: {user_text[:80]}"
                         )
 
                         # Dispatch to the main FastAPI event loop for DB + LLM processing
@@ -125,15 +122,15 @@ class DingTalkStreamManager:
                             try:
                                 future.result(timeout=120)
                             except Exception as e:
-                                print(f"[DingTalk Stream] LLM processing error: {e}", flush=True)
+                                logger.error(f"[DingTalk Stream] LLM processing error: {e}")
                                 import traceback
                                 traceback.print_exc()
                         else:
-                            print("[DingTalk Stream] Main loop not available for dispatch", flush=True)
+                            logger.warning("[DingTalk Stream] Main loop not available for dispatch")
 
                         return dingtalk_stream.AckMessage.STATUS_OK, "ok"
                     except Exception as e:
-                        print(f"[DingTalk Stream] Error in message handler: {e}", flush=True)
+                        logger.error(f"[DingTalk Stream] Error in message handler: {e}")
                         import traceback
                         traceback.print_exc()
                         return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, str(e)
@@ -145,24 +142,23 @@ class DingTalkStreamManager:
                 ClawithChatbotHandler(),
             )
 
-            print(f"[DingTalk Stream] Connecting for agent {agent_id}...", flush=True)
+            logger.info(f"[DingTalk Stream] Connecting for agent {agent_id}...")
             # start_forever() blocks until disconnected
             client.start_forever()
 
         except ImportError:
-            print(
+            logger.warning(
                 "[DingTalk Stream] dingtalk-stream package not installed. "
-                "Install with: pip install dingtalk-stream",
-                flush=True,
+                "Install with: pip install dingtalk-stream"
             )
         except Exception as e:
-            print(f"[DingTalk Stream] Client error for {agent_id}: {e}", flush=True)
+            logger.error(f"[DingTalk Stream] Client error for {agent_id}: {e}")
             import traceback
             traceback.print_exc()
         finally:
             self._threads.pop(agent_id, None)
             self._stop_events.pop(agent_id, None)
-            print(f"[DingTalk Stream] Client stopped for agent {agent_id}", flush=True)
+            logger.info(f"[DingTalk Stream] Client stopped for agent {agent_id}")
 
     async def stop_client(self, agent_id: uuid.UUID):
         """Stop a running Stream client for an agent."""
@@ -171,11 +167,11 @@ class DingTalkStreamManager:
             stop_event.set()
         thread = self._threads.pop(agent_id, None)
         if thread and thread.is_alive():
-            print(f"[DingTalk Stream] Stopping client for agent {agent_id}", flush=True)
+            logger.info(f"[DingTalk Stream] Stopping client for agent {agent_id}")
 
     async def start_all(self):
         """Start Stream clients for all configured DingTalk agents."""
-        print("[DingTalk Stream] Initializing all active DingTalk channels...", flush=True)
+        logger.info("[DingTalk Stream] Initializing all active DingTalk channels...")
         async with async_session() as db:
             result = await db.execute(
                 select(ChannelConfig).where(
@@ -185,7 +181,7 @@ class DingTalkStreamManager:
             )
             configs = result.scalars().all()
 
-        print(f"[DingTalk Stream] Found {len(configs)} configured DingTalk channel(s)", flush=True)
+        logger.info(f"[DingTalk Stream] Found {len(configs)} configured DingTalk channel(s)")
 
         for config in configs:
             if config.app_id and config.app_secret:
@@ -194,9 +190,8 @@ class DingTalkStreamManager:
                     stop_existing=False,
                 )
             else:
-                print(
-                    f"[DingTalk Stream] Skipping agent {config.agent_id}: missing credentials",
-                    flush=True,
+                logger.warning(
+                    f"[DingTalk Stream] Skipping agent {config.agent_id}: missing credentials"
                 )
 
     def status(self) -> dict:

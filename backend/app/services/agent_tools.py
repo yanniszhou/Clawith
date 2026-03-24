@@ -19,6 +19,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
+from loguru import logger
+
 from sqlalchemy import select
 
 from app.database import async_session
@@ -203,13 +205,17 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_channel_file",
-            "description": "Send a file to the user via the current communication channel (Feishu, Slack, Discord, or web). Call this when you have created a file and the user would benefit from receiving it directly. Provide the workspace-relative file path (e.g. workspace/report.md).",
+            "description": "Send a file to a specific person or back to the current conversation. If member_name is provided, the system resolves the recipient across all connected channels (Feishu, Slack, etc.) and delivers the file via the appropriate channel. If member_name is omitted, the file is sent back through the current conversation channel.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
                         "description": "Workspace-relative path to the file, e.g. workspace/report.md",
+                    },
+                    "member_name": {
+                        "type": "string",
+                        "description": "Name of the person to send the file to. If provided, the system looks up this person across all configured channels and delivers via the appropriate one.",
                     },
                     "message": {
                         "type": "string",
@@ -298,6 +304,31 @@ AGENT_TOOLS = [
                     },
                 },
                 "required": ["agent_name", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_file_to_agent",
+            "description": "Send a workspace file to another digital employee. The file is copied into the target agent's workspace/inbox/files/ directory and a delivery note is created in their inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Target digital employee's name",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the source file, e.g. workspace/report.md",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Optional delivery note for the target digital employee",
+                    },
+                },
+                "required": ["agent_name", "file_path"],
             },
         },
     },
@@ -818,6 +849,35 @@ AGENT_TOOLS = [
             },
         },
     },
+    # --- Pages: public HTML hosting ---
+    {
+        "type": "function",
+        "function": {
+            "name": "publish_page",
+            "description": "Publish an HTML file from workspace as a public page. Returns a public URL that anyone can access without login. Only .html/.htm files can be published.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path in workspace, e.g. 'workspace/output.html'",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_published_pages",
+            "description": "List all pages published by this agent, showing their public URLs and view counts.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
 ]
 
 
@@ -825,6 +885,7 @@ AGENT_TOOLS = [
 # DB configuration.
 _ALWAYS_INCLUDE_CORE = {
     "send_channel_file",
+    "send_file_to_agent",
     "write_file",
 }
 # Feishu tools are ONLY included when the agent has a configured Feishu channel,
@@ -919,7 +980,7 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[dict]:
                         result.append(t)
                 return result
     except Exception as e:
-        print(f"[Tools] DB load failed, using fallback: {e}")
+        logger.error(f"[Tools] DB load failed, using fallback: {e}")
 
     # Fallback to hardcoded tools
     return AGENT_TOOLS
@@ -927,7 +988,7 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[dict]:
 
 # ─── Workspace initialization ──────────────────────────────────
 
-async def ensure_workspace(agent_id: uuid.UUID) -> Path:
+async def ensure_workspace(agent_id: uuid.UUID, tenant_id: str | None = None) -> Path:
     """Initialize agent workspace with standard structure."""
     ws = WORKSPACE_ROOT / str(agent_id)
     ws.mkdir(parents=True, exist_ok=True)
@@ -938,8 +999,11 @@ async def ensure_workspace(agent_id: uuid.UUID) -> Path:
     (ws / "workspace" / "knowledge_base").mkdir(exist_ok=True)
     (ws / "memory").mkdir(exist_ok=True)
 
-    # Ensure shared enterprise_info directory exists
-    enterprise_dir = WORKSPACE_ROOT / "enterprise_info"
+    # Ensure tenant-scoped enterprise_info directory exists
+    if tenant_id:
+        enterprise_dir = WORKSPACE_ROOT / f"enterprise_info_{tenant_id}"
+    else:
+        enterprise_dir = WORKSPACE_ROOT / "enterprise_info"
     enterprise_dir.mkdir(parents=True, exist_ok=True)
     (enterprise_dir / "knowledge_base").mkdir(exist_ok=True)
     # Create default company profile if missing
@@ -1004,7 +1068,7 @@ async def _sync_tasks_to_file(agent_id: uuid.UUID, ws: Path):
             encoding="utf-8",
         )
     except Exception as e:
-        print(f"[AgentTools] Failed to sync tasks: {e}")
+        logger.error(f"[AgentTools] Failed to sync tasks: {e}")
 
 
 # ─── Tool Executors ─────────────────────────────────────────────
@@ -1015,9 +1079,24 @@ _TOOL_AUTONOMY_MAP = {
     "delete_file": "delete_files",
     "send_feishu_message": "send_feishu_message",
     "send_message_to_agent": "send_feishu_message",
+    "send_file_to_agent": "send_feishu_message",
     "web_search": "web_search",
     "execute_code": "execute_code",
 }
+
+
+async def _get_agent_tenant_id(agent_id: uuid.UUID) -> str | None:
+    """Get the agent tenant ID for tenant-scoped shared paths."""
+    try:
+        from app.models.agent import Agent
+        async with async_session() as db:
+            r = await db.execute(select(Agent.tenant_id).where(Agent.id == agent_id))
+            tenant_id = r.scalar_one_or_none()
+            if tenant_id:
+                return str(tenant_id)
+    except Exception:
+        pass
+    return None
 
 
 async def _execute_tool_direct(
@@ -1030,7 +1109,8 @@ async def _execute_tool_direct(
     Used by the approval post-processing hook after an action
     has been approved and needs to actually run.
     """
-    ws = await ensure_workspace(agent_id)
+    _agent_tenant_id = await _get_agent_tenant_id(agent_id)
+    ws = await ensure_workspace(agent_id, tenant_id=_agent_tenant_id)
     try:
         if tool_name == "delete_file":
             return _delete_file(ws, arguments.get("path", ""))
@@ -1039,9 +1119,9 @@ async def _execute_tool_direct(
             content = arguments.get("content", "")
             if not path:
                 return "Missing path"
-            return _write_file(ws, path, content)
+            return _write_file(ws, path, content, tenant_id=_agent_tenant_id)
         elif tool_name == "execute_code":
-            return await _execute_code(agent_id, ws, arguments)
+            return await _execute_code(ws, arguments)
         elif tool_name == "web_search":
             return await _web_search(arguments)
         elif tool_name == "jina_search":
@@ -1050,6 +1130,8 @@ async def _execute_tool_direct(
             return await _send_feishu_message(agent_id, arguments)
         elif tool_name == "send_message_to_agent":
             return await _send_message_to_agent(agent_id, arguments)
+        elif tool_name == "send_file_to_agent":
+            return await _send_file_to_agent(agent_id, ws, arguments)
         else:
             return f"Tool {tool_name} does not support post-approval execution"
     except Exception as e:
@@ -1063,7 +1145,9 @@ async def execute_tool(
     user_id: uuid.UUID,
 ) -> str:
     """Execute a tool call and return the result as a string."""
-    ws = await ensure_workspace(agent_id)
+    _agent_tenant_id = await _get_agent_tenant_id(agent_id)
+
+    ws = await ensure_workspace(agent_id, tenant_id=_agent_tenant_id)
 
     # ── Autonomy boundary check ──
     action_type = _TOOL_AUTONOMY_MAP.get(tool_name)
@@ -1085,23 +1169,23 @@ async def execute_tool(
                             return f"⏳ This action requires approval. An approval request has been sent. Please wait for approval before retrying. (Approval ID: {result_check.get('approval_id', 'N/A')})"
                         return f"❌ Action denied: {result_check.get('message', 'unknown reason')}"
         except Exception as e:
-            print(f"[Autonomy] Check failed — blocking as safety measure: {e}")
+            logger.error(f"[Autonomy] Check failed — blocking as safety measure: {e}")
             return f"⚠️ Autonomy check failed ({e}). Operation blocked for safety. Please retry or contact admin."
 
     try:
         if tool_name == "list_files":
-            result = _list_files(ws, arguments.get("path", ""))
+            result = _list_files(ws, arguments.get("path", ""), tenant_id=_agent_tenant_id)
         elif tool_name == "read_file":
             path = arguments.get("path")
             if not path:
                 return "❌ Missing required argument 'path' for read_file"
-            result = _read_file(ws, path)
+            result = _read_file(ws, path, tenant_id=_agent_tenant_id)
         elif tool_name == "read_document":
             path = arguments.get("path")
             if not path:
                 return "❌ Missing required argument 'path' for read_document"
             max_chars = min(int(arguments.get("max_chars", 8000)), 20000)
-            result = await _read_document(ws, path, max_chars=max_chars)
+            result = await _read_document(ws, path, max_chars=max_chars, tenant_id=_agent_tenant_id)
         elif tool_name == "write_file":
             path = arguments.get("path")
             content = arguments.get("content")
@@ -1109,7 +1193,7 @@ async def execute_tool(
                 return "❌ Missing required argument 'path' for write_file. Please provide a file path like 'skills/my-skill/SKILL.md'"
             if content is None:
                 return "❌ Missing required argument 'content' for write_file"
-            result = _write_file(ws, path, content)
+            result = _write_file(ws, path, content, tenant_id=_agent_tenant_id)
         elif tool_name == "delete_file":
             result = _delete_file(ws, arguments.get("path", ""))
         elif tool_name == "manage_tasks":
@@ -1128,6 +1212,8 @@ async def execute_tool(
             result = await _send_web_message(agent_id, arguments)
         elif tool_name == "send_message_to_agent":
             result = await _send_message_to_agent(agent_id, arguments)
+        elif tool_name == "send_file_to_agent":
+            result = await _send_file_to_agent(agent_id, ws, arguments)
         elif tool_name == "send_channel_file":
             result = await _send_channel_file(agent_id, ws, arguments)
         elif tool_name == "web_search":
@@ -1179,6 +1265,11 @@ async def execute_tool(
         # ── Email Tools ──
         elif tool_name in ("send_email", "read_emails", "reply_email"):
             result = await _handle_email_tool(tool_name, agent_id, ws, arguments)
+        # ── Pages: public HTML hosting ──
+        elif tool_name == "publish_page":
+            result = await _publish_page(agent_id, user_id, ws, arguments)
+        elif tool_name == "list_published_pages":
+            result = await _list_published_pages(agent_id)
         else:
             # Try MCP tool execution
             result = await _execute_mcp_tool(tool_name, arguments, agent_id=agent_id)
@@ -1454,47 +1545,240 @@ async def _search_bing(query: str, api_key: str, max_results: int, language: str
 
 
 async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
-    """Send a file to the user via the current channel or return a download URL for web chat."""
+    """Send a file to a person or back to the current channel.
+    
+    Priority:
+    1. If member_name is provided, resolve the recipient across all configured channels
+       and deliver via the appropriate one (Feishu, Slack, etc.).
+    2. If channel_file_sender ContextVar is set (channel-initiated), use it directly.
+    3. Fall back to web chat download URL when no explicit recipient is requested.
+    """
     rel_path = arguments.get("file_path", "").strip()
     accompany_msg = arguments.get("message", "")
+    member_name = (arguments.get("member_name") or "").strip()
     if not rel_path:
-        return "❌ file_path is required"
+        return "Error: file_path is required"
 
     # Resolve file path within agent workspace
     file_path = (ws / rel_path).resolve()
     ws_resolved = ws.resolve()
     if not str(file_path).startswith(str(ws_resolved)):
-        # Also allow workspace/ prefix pointing to same location
         file_path = (WORKSPACE_ROOT / str(agent_id) / rel_path).resolve()
         if not file_path.exists():
-            return f"❌ File not found: {rel_path}"
+            return f"Error: File not found: {rel_path}"
     if not file_path.exists():
-        return f"❌ File not found: {rel_path}"
+        return f"Error: File not found: {rel_path}"
 
+    # Priority 1: explicit recipient - resolve member across channels
+    if member_name:
+        result = await _send_file_to_recipient(agent_id, file_path, member_name, accompany_msg)
+        if result:
+            return result
+        return (
+            f"Failed to send file to '{member_name}': recipient not reachable via configured channels. "
+            "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
+        )
+
+    # Priority 2: channel-initiated (ContextVar set by channel webhook handler)
     sender = channel_file_sender.get()
     if sender is not None:
-        # Channel mode: call the channel-specific send function
         try:
             await sender(file_path, accompany_msg)
-            return f"✅ File '{file_path.name}' sent to user via channel."
+            return f"File '{file_path.name}' sent to user via channel."
         except Exception as e:
-            return f"❌ Failed to send file: {e}"
-    else:
-        # Web chat mode: return a download URL
-        aid = channel_web_agent_id.get() or str(agent_id)
-        base_abs = (WORKSPACE_ROOT / str(agent_id)).resolve()
-        try:
-            file_rel = str(file_path.resolve().relative_to(base_abs))
-        except ValueError:
-            file_rel = rel_path
+            return f"Failed to send file: {e}"
+
+    # Priority 3: Web chat fallback — return download URL
+    aid = channel_web_agent_id.get() or str(agent_id)
+    base_abs = (WORKSPACE_ROOT / str(agent_id)).resolve()
+    try:
+        file_rel = str(file_path.resolve().relative_to(base_abs))
+    except ValueError:
+        file_rel = rel_path
+    from app.config import get_settings as _gs
+    _s = _gs()
+    base_url = getattr(_s, 'BASE_URL', '').rstrip('/') or ''
+    download_url = f"{base_url}/api/agents/{aid}/files/download?path={file_rel}"
+    msg = f"File ready: [{file_path.name}]({download_url})"
+    if accompany_msg:
+        msg = accompany_msg + "\n\n" + msg
+    return msg
+
+
+async def _send_file_to_recipient(
+    agent_id: uuid.UUID, file_path: Path, member_name: str, message: str = ""
+) -> str | None:
+    """Resolve a recipient by name and send file via their reachable channel.
+    
+    Checks Feishu and Slack channels configured for this agent.
+    Returns a result string, or None if no channel found.
+    """
+    from app.models.channel_config import ChannelConfig
+
+    async with async_session() as db:
+        # Load all channel configs for this agent
+        result = await db.execute(
+            select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
+        )
+        configs = {c.channel_type: c for c in result.scalars().all()}
+
+    # --- Try Feishu ---
+    feishu_config = configs.get("feishu")
+    if feishu_config:
+        feishu_result = await _send_file_via_feishu(agent_id, feishu_config, file_path, member_name, message)
+        if feishu_result:
+            return feishu_result
+
+    # --- Try Slack ---
+    slack_config = configs.get("slack")
+    if slack_config:
+        slack_result = await _send_file_via_slack(agent_id, slack_config, file_path, member_name, message)
+        if slack_result:
+            return slack_result
+
+    return None  # No channel could reach this recipient
+
+
+async def _resolve_feishu_recipient(agent_id: uuid.UUID, config, member_name: str) -> tuple[str, str] | None:
+    """Resolve a Feishu recipient by name. Returns (receive_id, id_type) or None."""
+    # 1. Try feishu_user_search (checks cache, OrgMember, User table)
+    import re as _re
+    search_result = await _feishu_user_search(agent_id, {"name": member_name})
+    
+    uid_match = _re.search(r'user_id: `([A-Za-z0-9]+)`', search_result)
+    oid_match = _re.search(r'open_id: `(ou_[A-Za-z0-9]+)`', search_result)
+    
+    if uid_match:
+        return (uid_match.group(1), "user_id")
+    if oid_match:
+        return (oid_match.group(1), "open_id")
+    
+    # 2. Try AgentRelationship
+    from app.models.org import AgentRelationship
+    from sqlalchemy.orm import selectinload
+    async with async_session() as db:
+        result = await db.execute(
+            select(AgentRelationship)
+            .where(AgentRelationship.agent_id == agent_id)
+            .options(selectinload(AgentRelationship.member))
+        )
+        for r in result.scalars().all():
+            if r.member and r.member.name == member_name:
+                if r.member.feishu_user_id:
+                    return (r.member.feishu_user_id, "user_id")
+                if r.member.feishu_open_id:
+                    return (r.member.feishu_open_id, "open_id")
+                break
+    return None
+
+
+async def _send_file_via_feishu(agent_id, config, file_path: Path, member_name: str, message: str) -> str | None:
+    """Send file to a person via Feishu. Returns result string or None."""
+    recipient = await _resolve_feishu_recipient(agent_id, config, member_name)
+    if not recipient:
+        return None
+    
+    receive_id, id_type = recipient
+    from app.services.feishu_service import feishu_service
+    try:
+        await feishu_service.upload_and_send_file(
+            config.app_id, config.app_secret,
+            receive_id, file_path,
+            receive_id_type=id_type,
+            accompany_msg=message,
+        )
+        return f"File '{file_path.name}' sent to {member_name} via Feishu."
+    except Exception as e:
+        # If upload fails, try sending a download link as fallback
+        import json as _j
         from app.config import get_settings as _gs
         _s = _gs()
         base_url = getattr(_s, 'BASE_URL', '').rstrip('/') or ''
-        download_url = f"{base_url}/api/agents/{aid}/files/download?path={file_rel}"
-        msg = f"✅ File ready: [{file_path.name}]({download_url})"
-        if accompany_msg:
-            msg = accompany_msg + "\n\n" + msg
-        return msg
+        base_abs = (WORKSPACE_ROOT / str(agent_id)).resolve()
+        try:
+            _rel = str(file_path.resolve().relative_to(base_abs))
+        except ValueError:
+            _rel = file_path.name
+        parts = []
+        if message:
+            parts.append(message)
+        if base_url:
+            dl_url = f"{base_url}/api/agents/{agent_id}/files/download?path={_rel}"
+            parts.append(f"{file_path.name}\n{dl_url}")
+        parts.append(f"File upload failed ({e}). If you need direct file sending, enable im:resource permission in Feishu.")
+        try:
+            await feishu_service.send_message(
+                config.app_id, config.app_secret,
+                receive_id, "text",
+                _j.dumps({"text": "\n\n".join(parts)}, ensure_ascii=False),
+                receive_id_type=id_type,
+            )
+            return f"File upload to Feishu failed, sent download link to {member_name} instead."
+        except Exception:
+            return f"Failed to send file to {member_name} via Feishu: {e}"
+
+
+async def _send_file_via_slack(agent_id, config, file_path: Path, member_name: str, message: str) -> str | None:
+    """Send file to a person via Slack DM. Returns result string or None."""
+    import httpx
+    bot_token = config.app_secret or ""
+    if not bot_token:
+        return None
+    
+    # Resolve Slack user by name
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://slack.com/api/users.list",
+                headers={"Authorization": f"Bearer {bot_token}"},
+                params={"limit": 200},
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                return None
+            slack_user_id = None
+            for u in data.get("members", []):
+                profile = u.get("profile", {})
+                display = profile.get("display_name", "") or profile.get("real_name", "") or u.get("real_name", "")
+                if display == member_name or u.get("name") == member_name:
+                    slack_user_id = u.get("id")
+                    break
+            if not slack_user_id:
+                return None
+            
+            # Open a DM channel
+            dm_resp = await client.post(
+                "https://slack.com/api/conversations.open",
+                headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
+                json={"users": slack_user_id},
+            )
+            dm_data = dm_resp.json()
+            if not dm_data.get("ok"):
+                return None
+            channel_id = dm_data["channel"]["id"]
+            
+            # Upload file
+            upload_url_resp = await client.post(
+                "https://slack.com/api/files.getUploadURLExternal",
+                headers={"Authorization": f"Bearer {bot_token}"},
+                data={"filename": file_path.name, "length": str(file_path.stat().st_size)},
+            )
+            ud = upload_url_resp.json()
+            if not ud.get("ok"):
+                return f"Slack file upload failed: {ud.get('error')}"
+            await client.post(ud["upload_url"], content=file_path.read_bytes(),
+                            headers={"Content-Type": "application/octet-stream"})
+            complete = await client.post(
+                "https://slack.com/api/files.completeUploadExternal",
+                headers={"Authorization": f"Bearer {bot_token}"},
+                json={"files": [{"id": ud["file_id"]}], "channel_id": channel_id,
+                      "initial_comment": message or ""},
+            )
+            if not complete.json().get("ok"):
+                return f"Slack file upload complete failed: {complete.json().get('error')}"
+            return f"File '{file_path.name}' sent to {member_name} via Slack."
+    except Exception as e:
+        return f"Failed to send file via Slack: {e}"
 
 
 async def _execute_mcp_tool(tool_name: str, arguments: dict, agent_id=None) -> str:
@@ -1746,11 +2030,16 @@ async def _smithery_auto_recover(api_key: str, mcp_url: str, namespace: str, con
         return f"❌ Auto-recovery failed: {str(e)[:200]}"
 
 
-def _list_files(ws: Path, rel_path: str) -> str:
-    # Handle enterprise_info/ as shared directory
+def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None) -> str:
+    # Handle enterprise_info/ as shared directory (tenant-scoped)
     if rel_path and rel_path.startswith("enterprise_info"):
-        target = (WORKSPACE_ROOT / rel_path).resolve()
-        enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        if tenant_id:
+            enterprise_root = (WORKSPACE_ROOT / f"enterprise_info_{tenant_id}").resolve()
+        else:
+            enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        # Remap: enterprise_info/... → enterprise_info_{tenant_id}/...
+        sub = rel_path[len("enterprise_info"):].lstrip("/")
+        target = (enterprise_root / sub).resolve() if sub else enterprise_root
         if not str(target).startswith(str(enterprise_root)):
             return "Access denied for this path"
     else:
@@ -1765,7 +2054,10 @@ def _list_files(ws: Path, rel_path: str) -> str:
     items = []
     # If listing root, also show enterprise_info entry
     if not rel_path:
-        enterprise_dir = WORKSPACE_ROOT / "enterprise_info"
+        if tenant_id:
+            enterprise_dir = WORKSPACE_ROOT / f"enterprise_info_{tenant_id}"
+        else:
+            enterprise_dir = WORKSPACE_ROOT / "enterprise_info"
         if enterprise_dir.exists():
             items.append("  📁 enterprise_info/ (shared company info)")
 
@@ -1794,11 +2086,15 @@ def _list_files(ws: Path, rel_path: str) -> str:
     return header + "\n".join(items)
 
 
-def _read_file(ws: Path, rel_path: str) -> str:
-    # Handle enterprise_info/ as shared directory
+def _read_file(ws: Path, rel_path: str, tenant_id: str | None = None) -> str:
+    # Handle enterprise_info/ as shared directory (tenant-scoped)
     if rel_path and rel_path.startswith("enterprise_info"):
-        file_path = (WORKSPACE_ROOT / rel_path).resolve()
-        enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        if tenant_id:
+            enterprise_root = (WORKSPACE_ROOT / f"enterprise_info_{tenant_id}").resolve()
+        else:
+            enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        sub = rel_path[len("enterprise_info"):].lstrip("/")
+        file_path = (enterprise_root / sub).resolve() if sub else enterprise_root
         if not str(file_path).startswith(str(enterprise_root)):
             return "Access denied for this path"
     else:
@@ -1818,12 +2114,16 @@ def _read_file(ws: Path, rel_path: str) -> str:
         return f"Read failed: {e}"
 
 
-async def _read_document(ws: Path, rel_path: str, max_chars: int = 8000) -> str:
+async def _read_document(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
     """Read content from office documents (PDF, DOCX, XLSX, PPTX)."""
-    # Handle enterprise_info/ as shared directory
+    # Handle enterprise_info/ as shared directory (tenant-scoped)
     if rel_path and rel_path.startswith("enterprise_info"):
-        file_path = (WORKSPACE_ROOT / rel_path).resolve()
-        enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        if tenant_id:
+            enterprise_root = (WORKSPACE_ROOT / f"enterprise_info_{tenant_id}").resolve()
+        else:
+            enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        sub = rel_path[len("enterprise_info"):].lstrip("/")
+        file_path = (enterprise_root / sub).resolve() if sub else enterprise_root
         if not str(file_path).startswith(str(enterprise_root)):
             return "Access denied for this path"
     else:
@@ -1941,14 +2241,27 @@ async def _read_document(ws: Path, rel_path: str, max_chars: int = 8000) -> str:
         return f"Document read failed: {str(e)[:200]}"
 
 
-def _write_file(ws: Path, rel_path: str, content: str) -> str:
+def _write_file(ws: Path, rel_path: str, content: str, tenant_id: str | None = None) -> str:
     # Protect tasks.json from direct writes
     if rel_path.strip("/") == "tasks.json":
         return "tasks.json is read-only. Use manage_tasks tool to manage tasks."
 
-    file_path = (ws / rel_path).resolve()
-    if not str(file_path).startswith(str(ws.resolve())):
-        return "Access denied for this path"
+    # Handle enterprise_info/ as shared directory (tenant-scoped)
+    if rel_path and rel_path.startswith("enterprise_info"):
+        if tenant_id:
+            enterprise_root = (WORKSPACE_ROOT / f"enterprise_info_{tenant_id}").resolve()
+        else:
+            enterprise_root = (WORKSPACE_ROOT / "enterprise_info").resolve()
+        sub = rel_path[len("enterprise_info"):].lstrip("/")
+        if not sub:
+            return "Write failed: please provide a file path under enterprise_info/, e.g. enterprise_info/knowledge_base/report.md"
+        file_path = (enterprise_root / sub).resolve()
+        if not str(file_path).startswith(str(enterprise_root)):
+            return "Access denied for this path"
+    else:
+        file_path = (ws / rel_path).resolve()
+        if not str(file_path).startswith(str(ws.resolve())):
+            return "Access denied for this path"
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2174,8 +2487,8 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     f"通讯录搜索结果：{_search_result[:200]}"
                 )
 
-            if not target_member.feishu_open_id and not target_member.email and not target_member.phone:
-                return f"❌ {member_name} has no linked Feishu account (no open_id, email, or phone)"
+            if not target_member.feishu_user_id and not target_member.feishu_open_id and not target_member.email and not target_member.phone:
+                return f"❌ {member_name} has no linked Feishu account (no user_id, open_id, email, or phone)"
 
             # Get the agent's Feishu bot credentials
             config_result = await db.execute(
@@ -2209,12 +2522,15 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     agent_obj = agent_r.scalar_one_or_none()
                     creator_id = agent_obj.creator_id if agent_obj else agent_id
 
-                    # Look up the platform user for this Feishu open_id
+                    # Look up the platform user: prefer feishu_user_id, then feishu_open_id
                     from app.models.user import User as UserModel
-                    u_r = await db.execute(
-                        select(UserModel).where(UserModel.feishu_open_id == open_id)
-                    )
-                    feishu_user = u_r.scalar_one_or_none()
+                    feishu_user = None
+                    if open_id:  # open_id param is contextual, try as user_id first isn't reliable here
+                        # Try user lookup by open_id since that's what we have from session context
+                        u_r = await db.execute(
+                            select(UserModel).where(UserModel.feishu_open_id == open_id)
+                        )
+                        feishu_user = u_r.scalar_one_or_none()
                     user_id = feishu_user.id if feishu_user else creator_id
 
                     ext_conv_id = f"feishu_p2p_{open_id}"
@@ -2235,9 +2551,9 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     ))
                     sess.last_message_at = _dt.now(_tz.utc)
                     await db.commit()
-                    print(f"[Feishu] Saved outgoing message to session {sess.id} ({member_name})")
+                    logger.info(f"[Feishu] Saved outgoing message to session {sess.id} ({member_name})")
                 except Exception as e:
-                    print(f"[Feishu] Failed to save outgoing message to history: {e}")
+                    logger.error(f"[Feishu] Failed to save outgoing message to history: {e}")
 
             # Step 1: Try using feishu_user_id (tenant-stable, works across apps)
             if target_member.feishu_user_id:
@@ -2392,6 +2708,181 @@ async def _send_web_message(agent_id: uuid.UUID, args: dict) -> str:
         return f"❌ Web message send error: {str(e)[:200]}"
 
 
+async def _send_file_to_agent(from_agent_id: uuid.UUID, ws: Path, args: dict) -> str:
+    """Send a workspace file to another digital employee (agent)."""
+    agent_name = (args.get("agent_name") or "").strip()
+    rel_path = (args.get("file_path") or "").strip()
+    delivery_note = (args.get("message") or "").strip()
+
+    if not agent_name or not rel_path:
+        return "❌ Please provide both agent_name and file_path"
+
+    # Resolve source file path inside sender workspace
+    source_file_path = (ws / rel_path).resolve()
+    ws_resolved = ws.resolve()
+    sender_root = (WORKSPACE_ROOT / str(from_agent_id)).resolve()
+    if not str(source_file_path).startswith(str(ws_resolved)):
+        source_file_path = (sender_root / rel_path).resolve()
+    if not str(source_file_path).startswith(str(sender_root)):
+        return "❌ Access denied: source path is outside your workspace"
+
+    if not source_file_path.exists():
+        return f"❌ Source file not found: {rel_path}"
+    if not source_file_path.is_file():
+        return f"❌ Source path is not a file: {rel_path}"
+
+    # File size limit (50 MB)
+    MAX_FILE_SIZE = 50 * 1024 * 1024
+    file_size = source_file_path.stat().st_size
+    if file_size > MAX_FILE_SIZE:
+        size_mb = file_size / (1024 * 1024)
+        return f"❌ File too large ({size_mb:.1f} MB). Maximum allowed is 50 MB."
+
+    try:
+        from app.models.agent import Agent
+        from app.services.activity_logger import log_activity
+        import shutil
+
+        async with async_session() as db:
+            src_result = await db.execute(select(Agent).where(Agent.id == from_agent_id))
+            source_agent = src_result.scalar_one_or_none()
+            source_name = source_agent.name if source_agent else "Unknown agent"
+            source_tenant_id = source_agent.tenant_id if source_agent else None
+
+            # Build base filter: same tenant + not self
+            base_filter = [Agent.id != from_agent_id]
+            if source_tenant_id:
+                base_filter.append(Agent.tenant_id == source_tenant_id)
+
+            # Try exact name match first, then fuzzy
+            target_agent = None
+            exact_result = await db.execute(
+                select(Agent).where(Agent.name == agent_name, *base_filter)
+            )
+            target_agent = exact_result.scalars().first()
+            if not target_agent:
+                # Sanitize SQL wildcards in user input
+                safe_name = agent_name.replace("%", "").replace("_", "\_")
+                fuzzy_result = await db.execute(
+                    select(Agent).where(Agent.name.ilike(f"%{safe_name}%"), *base_filter)
+                )
+                target_agent = fuzzy_result.scalars().first()
+            if not target_agent:
+                # Only show agents from relationships, not all agents
+                from app.models.org import AgentAgentRelationship
+                rel_r = await db.execute(
+                    select(Agent.name).join(
+                        AgentAgentRelationship,
+                        (AgentAgentRelationship.target_agent_id == Agent.id) & (AgentAgentRelationship.agent_id == from_agent_id)
+                    )
+                )
+                rel_names = [n for (n,) in rel_r.all()]
+                return f"❌ No agent found matching '{agent_name}'. Your connected colleagues: {', '.join(rel_names) if rel_names else 'none — ask your administrator to set up relationships'}"
+
+            if target_agent.is_expired or (target_agent.expires_at and datetime.now(timezone.utc) >= target_agent.expires_at):
+                return f"⚠️ {target_agent.name} is currently unavailable — their service period has ended. Please contact the platform administrator."
+
+            # Enforce relationship: only allow file transfer with agents in relationships
+            from app.models.org import AgentAgentRelationship
+            rel_check = await db.execute(
+                select(AgentAgentRelationship.id).where(
+                    ((AgentAgentRelationship.agent_id == from_agent_id) & (AgentAgentRelationship.target_agent_id == target_agent.id))
+                    | ((AgentAgentRelationship.agent_id == target_agent.id) & (AgentAgentRelationship.target_agent_id == from_agent_id))
+                ).limit(1)
+            )
+            if not rel_check.scalar_one_or_none():
+                return f"❌ You do not have a relationship with {target_agent.name}. Only agents in your relationship list can receive files. Ask your administrator to add a relationship if needed."
+
+            target_tenant_id = str(target_agent.tenant_id) if target_agent.tenant_id else None
+            target_name = target_agent.name
+            target_id = target_agent.id
+
+        target_ws = await ensure_workspace(target_id, tenant_id=target_tenant_id)
+        inbox_dir = (target_ws / "workspace" / "inbox").resolve()
+        files_dir = (inbox_dir / "files").resolve()
+        target_ws_resolved = target_ws.resolve()
+        if not str(inbox_dir).startswith(str(target_ws_resolved)) or not str(files_dir).startswith(str(target_ws_resolved)):
+            return "❌ Access denied for target agent inbox path"
+
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        files_dir.mkdir(parents=True, exist_ok=True)
+
+        ts = datetime.now(timezone.utc)
+        stamp = ts.strftime("%Y%m%d_%H%M%S_%f")
+        delivered_name = source_file_path.name
+        delivered_path = files_dir / delivered_name
+        while delivered_path.exists():
+            delivered_name = f"{stamp}_{source_file_path.name}"
+            delivered_path = files_dir / delivered_name
+
+        shutil.copy2(source_file_path, delivered_path)
+
+        sender_short = str(from_agent_id)[:8]
+        note_path = inbox_dir / f"{stamp}_{sender_short}_file_delivery.md"
+        target_rel_path = f"workspace/inbox/files/{delivered_name}"
+        note_lines = [
+            f"# File delivery from {source_name}",
+            "",
+            f"- Time (UTC): {ts.isoformat()}",
+            f"- Sender: {source_name}",
+            f"- Source path: {rel_path}",
+            f"- Delivered file: {target_rel_path}",
+            "",
+        ]
+        if delivery_note:
+            note_lines.append("## Note")
+            note_lines.append(delivery_note)
+            note_lines.append("")
+        note_lines.append("## Action")
+        note_lines.append(f"- Read the file via `read_file(path=\"{target_rel_path}\")`")
+        note_path.write_text("\n".join(note_lines), encoding="utf-8")
+
+        from app.models.audit import AuditLog
+        async with async_session() as db:
+            db.add(AuditLog(
+                agent_id=from_agent_id,
+                action="collaboration:file_send",
+                details={
+                    "to_agent": str(target_id),
+                    "to_agent_name": target_name,
+                    "source_file": rel_path,
+                    "delivered_file": target_rel_path,
+                },
+            ))
+            db.add(AuditLog(
+                agent_id=target_id,
+                action="collaboration:file_receive",
+                details={
+                    "from_agent": str(from_agent_id),
+                    "from_agent_name": source_name,
+                    "source_file": rel_path,
+                    "delivered_file": target_rel_path,
+                },
+            ))
+            await db.commit()
+
+        await log_activity(
+            from_agent_id,
+            "agent_file_sent",
+            f"Sent file to {target_name}",
+            detail={"target_agent": target_name, "source_file": rel_path, "delivered_file": target_rel_path},
+        )
+        await log_activity(
+            target_id,
+            "agent_file_received",
+            f"Received file from {source_name}",
+            detail={"source_agent": source_name, "source_file": rel_path, "delivered_file": target_rel_path},
+        )
+
+        return (
+            f"✅ File sent to {target_name}.\n"
+            f"- Delivered to: {target_rel_path}\n"
+            f"- Inbox note: workspace/inbox/{note_path.name}"
+        )
+    except Exception as e:
+        return f"❌ Agent file send error: {str(e)[:200]}"
+
+
 async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
     """Send a message to another digital employee. Uses a single request-response pattern:
     the source agent sends a message, the target agent replies once, and the result is returned.
@@ -2415,36 +2906,52 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
             src_result = await db.execute(select(Agent).where(Agent.id == from_agent_id))
             source_agent = src_result.scalar_one_or_none()
             source_name = source_agent.name if source_agent else "Unknown agent"
+            source_tenant_id = source_agent.tenant_id if source_agent else None
 
-            # Find target agent by name
-            result = await db.execute(
-                select(Agent).where(Agent.name.ilike(f"%{agent_name}%"), Agent.id != from_agent_id)
+            # Build base filter: same tenant + not self
+            base_filter = [Agent.id != from_agent_id]
+            if source_tenant_id:
+                base_filter.append(Agent.tenant_id == source_tenant_id)
+
+            # Find target agent by name — exact match first, then fuzzy
+            target = None
+            exact_result = await db.execute(
+                select(Agent).where(Agent.name == agent_name, *base_filter)
             )
-            target = result.scalars().first()
+            target = exact_result.scalars().first()
             if not target:
-                all_r = await db.execute(select(Agent).where(Agent.id != from_agent_id))
-                names = [a.name for a in all_r.scalars().all()]
-                return f"❌ No agent found matching '{agent_name}'. Available: {', '.join(names) if names else 'none'}"
+                safe_name = agent_name.replace("%", "").replace("_", "\_")
+                fuzzy_result = await db.execute(
+                    select(Agent).where(Agent.name.ilike(f"%{safe_name}%"), *base_filter)
+                )
+                target = fuzzy_result.scalars().first()
+            if not target:
+                # Only show agents from relationships, not all agents
+                from app.models.org import AgentAgentRelationship
+                rel_r = await db.execute(
+                    select(Agent.name).join(
+                        AgentAgentRelationship,
+                        (AgentAgentRelationship.target_agent_id == Agent.id) & (AgentAgentRelationship.agent_id == from_agent_id)
+                    )
+                )
+                rel_names = [n for (n,) in rel_r.all()]
+                return f"❌ No agent found matching '{agent_name}'. Your connected colleagues: {', '.join(rel_names) if rel_names else 'none — ask your administrator to set up relationships'}"
 
             # Check if target agent has expired
             if target.is_expired or (target.expires_at and datetime.now(timezone.utc) >= target.expires_at):
                 return f"⚠️ {target.name} is currently unavailable — their service period has ended. Please contact the platform administrator."
 
-            # ── OpenClaw target: queue message for gateway poll ──
-            if getattr(target, "agent_type", "native") == "openclaw":
-                from app.models.gateway_message import GatewayMessage as GMsg
-                gw_msg = GMsg(
-                    agent_id=target.id,
-                    sender_agent_id=from_agent_id,
-                    sender_user_id=source_agent.creator_id if source_agent else None,
-                    content=f"[From {source_name}] {message_text}",
-                    status="pending",
-                )
-                db.add(gw_msg)
-                await db.commit()
-                online = target.openclaw_last_seen and (datetime.now(timezone.utc) - target.openclaw_last_seen).total_seconds() < 300
-                status_hint = "online" if online else "offline (message will be delivered on next heartbeat)"
-                return f"✅ Message sent to {target.name} (OpenClaw agent, currently {status_hint}). The message has been queued and will be delivered when the agent polls for updates."
+            # Enforce relationship: only allow communication with agents in relationships
+            from app.models.org import AgentAgentRelationship
+            rel_check = await db.execute(
+                select(AgentAgentRelationship.id).where(
+                    ((AgentAgentRelationship.agent_id == from_agent_id) & (AgentAgentRelationship.target_agent_id == target.id))
+                    | ((AgentAgentRelationship.agent_id == target.id) & (AgentAgentRelationship.target_agent_id == from_agent_id))
+                ).limit(1)
+            )
+            if not rel_check.scalar_one_or_none():
+                return f"❌ You do not have a relationship with {target.name}. Only agents in your relationship list can be contacted. Ask your administrator to add a relationship if needed."
+
             src_part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == from_agent_id))
             src_participant = src_part_r.scalar_one_or_none()
             tgt_part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == target.id))
@@ -2461,8 +2968,8 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 )
             )
             chat_session = sess_r.scalar_one_or_none()
+            owner_id = source_agent.creator_id if source_agent else from_agent_id
             if not chat_session:
-                owner_id = source_agent.creator_id if source_agent else from_agent_id
                 src_part_id = src_participant.id if src_participant else None
                 chat_session = ChatSession(
                     agent_id=session_agent_id,
@@ -2476,6 +2983,44 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 await db.flush()
 
             session_id = str(chat_session.id)
+
+            # ── OpenClaw target: queue message for gateway poll ──
+            if getattr(target, "agent_type", "native") == "openclaw":
+                # 1. Save the source message to the chat session
+                db.add(ChatMessage(
+                    agent_id=session_agent_id,
+                    user_id=owner_id,
+                    role="user",
+                    content=message_text,
+                    conversation_id=session_id,
+                    participant_id=src_participant.id if src_participant else None,
+                ))
+                chat_session.last_message_at = datetime.now(timezone.utc)
+                
+                # 2. Queue for Gateway
+                from app.models.gateway_message import GatewayMessage as GMsg
+                gw_msg = GMsg(
+                    agent_id=target.id,
+                    sender_agent_id=from_agent_id,
+                    sender_user_id=owner_id,
+                    content=f"[From {source_name}] {message_text}",
+                    status="pending",
+                    conversation_id=session_id,
+                )
+                db.add(gw_msg)
+                await db.commit()
+                
+                # 3. Log activity
+                from app.services.activity_logger import log_activity
+                await log_activity(
+                    from_agent_id, "agent_msg_sent",
+                    f"Sent message to {target.name} (queued)",
+                    detail={"partner": target.name, "message": message_text[:200]},
+                )
+
+                online = target.openclaw_last_seen and (datetime.now(timezone.utc) - target.openclaw_last_seen).total_seconds() < 300
+                status_hint = "online" if online else "offline (message will be delivered on next heartbeat)"
+                return f"✅ Message sent to {target.name} (OpenClaw agent, currently {status_hint}). The message has been queued and will be delivered when the agent polls for updates."
 
             # Prepare target LLM
             from app.services.agent_context import build_agent_context
@@ -2492,7 +3037,7 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 fb_r = await db.execute(select(LLMModel).where(LLMModel.id == target.fallback_model_id))
                 target_model = fb_r.scalar_one_or_none()
                 if target_model:
-                    print(f"[A2A] Primary model unavailable for {target.name}, using fallback: {target_model.model}")
+                    logger.warning(f"[A2A] Primary model unavailable for {target.name}, using fallback: {target_model.model}")
 
             if not target_model:
                 return f"⚠️ {target.name} has no LLM model configured"
@@ -2503,6 +3048,11 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 "\n\n--- Agent-to-Agent Message ---\n"
                 "You are receiving a message from another digital employee. "
                 "Reply concisely and helpfully. Focus on the request and provide a clear answer.\n"
+                "\n** CRITICAL FILE DELIVERY RULE **\n"
+                "After you write any file (report, document, analysis, etc.) that the requesting agent needs, "
+                "you MUST call `send_file_to_agent(agent_name=\"<requester_name>\", file_path=\"<path>\")` "
+                "to deliver it. The other agent CANNOT access your workspace. "
+                "Never just tell them the path — always deliver explicitly.\n"
             )
 
             # Load recent history for context
@@ -2540,11 +3090,15 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
             await db.commit()
 
             # Call target LLM with tool support (multi-round)
+            import asyncio
+            import random
+            import httpx
             from app.services.llm_utils import (
                 get_provider_base_url,
                 create_llm_client,
                 LLMMessage,
             )
+            from app.services.llm_client import LLMError
             from app.services.agent_tools import get_agent_tools_for_llm, execute_tool
             base_url = get_provider_base_url(target_model.provider, target_model.base_url)
             if not base_url:
@@ -2570,14 +3124,49 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 base_url=base_url,
                 timeout=120.0,
             )
+            _A2A_RETRYABLE_MARKERS = (
+                "http 408", "http 429", "http 500", "http 502", "http 503", "http 504",
+                "timeout", "timed out", "connection failed", "temporarily unavailable", "rate limit",
+            )
+            _A2A_MAX_RETRIES = 3
+
+            def _is_retryable_llm_error(exc: Exception) -> bool:
+                """Determine whether an LLM exception is transient and worth retrying."""
+                if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+                    return True
+                if isinstance(exc, LLMError):
+                    lowered = (str(exc) or "").lower()
+                    return any(m in lowered for m in _A2A_RETRYABLE_MARKERS)
+                return False
+
             try:
                 for _round in range(max_tool_rounds):
-                    response = await llm_client.complete(
-                        messages=full_msgs,
-                        tools=tools_for_llm if tools_for_llm else None,
-                        temperature=0.7,
-                        max_tokens=4096,
-                    )
+                    response = None
+                    for attempt in range(1, _A2A_MAX_RETRIES + 1):
+                        try:
+                            response = await llm_client.complete(
+                                messages=full_msgs,
+                                tools=tools_for_llm if tools_for_llm else None,
+                                temperature=target_model.temperature,
+                                max_tokens=4096,
+                            )
+                            break
+                        except Exception as llm_exc:
+                            if not _is_retryable_llm_error(llm_exc) or attempt >= _A2A_MAX_RETRIES:
+                                raise
+
+                            err_text = str(llm_exc) or type(llm_exc).__name__
+                            # Exponential backoff with jitter to prevent thundering herd
+                            backoff = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                            logger.warning(
+                                f"[A2A] LLM call failed for {target.name} (round={_round + 1}, "
+                                f"attempt={attempt}/{_A2A_MAX_RETRIES}): {err_text[:200]}. "
+                                f"Retrying in {backoff:.1f}s"
+                            )
+                            await asyncio.sleep(backoff)
+
+                    if response is None:
+                        raise RuntimeError("A2A LLM response is unexpectedly empty after retries")
 
                     # Track tokens from API response
                     real_tokens = extract_usage_tokens(response.usage)
@@ -2616,6 +3205,15 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
 
                             tool_result = await execute_tool(tool_name, tool_args, target.id, owner_id)
 
+                            # Nudge: after write_file in A2A, remind to deliver via send_file_to_agent
+                            if tool_name == "write_file" and isinstance(tool_result, str) and tool_result.startswith("\u2705"):
+                                wrote_path = tool_args.get("path", "")
+                                tool_result += (
+                                    f"\n\n⚠️ REMINDER: The requesting agent ({source_name}) cannot access your workspace. "
+                                    f"You MUST now call `send_file_to_agent(agent_name=\"{source_name}\", file_path=\"{wrote_path}\")` "
+                                    f"to deliver this file to them."
+                                )
+
                             # Save tool_call to DB so it appears in chat history
                             try:
                                 async with async_session() as _tc_db:
@@ -2634,7 +3232,7 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                                     ))
                                     await _tc_db.commit()
                             except Exception as _tc_err:
-                                print(f"[A2A] Failed to save tool_call: {_tc_err}")
+                                logger.error(f"[A2A] Failed to save tool_call: {_tc_err}")
 
                             # Add tool result to conversation
                             full_msgs.append(LLMMessage(
@@ -2687,9 +3285,18 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
             return f"💬 {target.name} replied:\n{target_reply}"
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return f"❌ Message send error: {str(e)[:200]}"
+        logger.exception(
+            f"[A2A] send_message_to_agent failed: from={from_agent_id}, to={args.get('agent_name', '')}"
+        )
+        error_type = type(e).__name__
+        error_detail = (str(e) or "").strip()
+        if not error_detail:
+            timeout_types = {"ReadTimeout", "ConnectTimeout", "TimeoutException"}
+            if error_type in timeout_types:
+                error_detail = "LLM request timed out while waiting for target agent response"
+            else:
+                error_detail = "No detailed error message returned from upstream"
+        return f"❌ Message send error ({error_type}): {error_detail[:200]}"
 
 
 
@@ -2749,7 +3356,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
 
     content = arguments.get("content", "").strip()
     if not content:
-        return "❌ Post content cannot be empty."
+        return "Error: Post content cannot be empty."
     if len(content) > 500:
         content = content[:500]
 
@@ -2759,7 +3366,7 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
             ar = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
             agent = ar.scalar_one_or_none()
             if not agent:
-                return "❌ Agent not found."
+                return "Error: Agent not found."
 
             post = PlazaPost(
                 author_id=agent_id,
@@ -2769,12 +3376,41 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
                 tenant_id=agent.tenant_id,
             )
             db.add(post)
+            await db.flush()  # get post.id
+
+            # Extract @mentions
+            try:
+                import re
+                mentions = re.findall(r'@(\S+)', content)
+                if mentions:
+                    from app.services.notification_service import send_notification
+                    a_q = select(AgentModel).where(AgentModel.id != agent_id)
+                    if agent.tenant_id:
+                        a_q = a_q.where(AgentModel.tenant_id == agent.tenant_id)
+                    a_map = {a.name.lower(): a for a in (await db.execute(a_q)).scalars().all()}
+                    notified = set()
+                    for m in mentions:
+                        ma = a_map.get(m.lower())
+                        if ma and ma.id not in notified:
+                            notified.add(ma.id)
+                            await send_notification(
+                                db, agent_id=ma.id,
+                                type="mention",
+                                title=f"{agent.name} mentioned you in a plaza post",
+                                body=content[:150],
+                                link=f"/plaza?post={post.id}",
+                                ref_id=post.id,
+                                sender_name=agent.name,
+                            )
+            except Exception:
+                pass
+
             await db.commit()
             await db.refresh(post)
-            return f"✅ Post published! (ID: {post.id})"
+            return f"Post published! (ID: {post.id})"
 
     except Exception as e:
-        return f"❌ Failed to create post: {str(e)[:200]}"
+        return f"Failed to create post: {str(e)[:200]}"
 
 
 async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
@@ -2785,14 +3421,14 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
     post_id = arguments.get("post_id", "")
     content = arguments.get("content", "").strip()
     if not content:
-        return "❌ Comment content cannot be empty."
+        return "Error: Comment content cannot be empty."
     if len(content) > 300:
         content = content[:300]
 
     try:
         pid = uuid.UUID(str(post_id))
     except Exception:
-        return "❌ Invalid post_id format."
+        return "Error: Invalid post_id format."
 
     try:
         async with async_session() as db:
@@ -2800,13 +3436,13 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
             pr = await db.execute(select(PlazaPost).where(PlazaPost.id == pid))
             post = pr.scalar_one_or_none()
             if not post:
-                return "❌ Post not found."
+                return "Error: Post not found."
 
             # Get agent name
             ar = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
             agent = ar.scalar_one_or_none()
             if not agent:
-                return "❌ Agent not found."
+                return "Error: Agent not found."
 
             comment = PlazaComment(
                 post_id=pid,
@@ -2817,11 +3453,107 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
             )
             db.add(comment)
             post.comments_count = (post.comments_count or 0) + 1
+
+            # Notify post author (if not self)
+            if post.author_id != agent_id:
+                try:
+                    from app.services.notification_service import send_notification
+                    if post.author_type == "agent":
+                        await send_notification(
+                            db, agent_id=post.author_id,
+                            type="plaza_reply",
+                            title=f"{agent.name} commented on your post",
+                            body=content[:150],
+                            link=f"/plaza?post={pid}",
+                            ref_id=pid,
+                            sender_name=agent.name,
+                        )
+                        # Also notify human creator
+                        pa = (await db.execute(select(AgentModel).where(AgentModel.id == post.author_id))).scalar_one_or_none()
+                        if pa and pa.creator_id:
+                            await send_notification(
+                                db, user_id=pa.creator_id,
+                                type="plaza_comment",
+                                title=f"{agent.name} commented on {pa.name}'s post",
+                                body=content[:100],
+                                link=f"/plaza?post={pid}",
+                                ref_id=pid,
+                                sender_name=agent.name,
+                            )
+                    elif post.author_type == "human":
+                        await send_notification(
+                            db, user_id=post.author_id,
+                            type="plaza_reply",
+                            title=f"{agent.name} commented on your post",
+                            body=content[:150],
+                            link=f"/plaza?post={pid}",
+                            ref_id=pid,
+                            sender_name=agent.name,
+                        )
+                except Exception:
+                    pass
+
+            # Notify other agents who commented on this post
+            try:
+                from app.services.notification_service import send_notification
+                other_crs = await db.execute(
+                    select(PlazaComment.author_id, PlazaComment.author_type)
+                    .where(PlazaComment.post_id == pid)
+                    .distinct()
+                )
+                notified = {post.author_id, agent_id}
+                for row in other_crs.fetchall():
+                    cid, ctype = row
+                    if cid in notified:
+                        continue
+                    notified.add(cid)
+                    if ctype == "agent":
+                        await send_notification(
+                            db, agent_id=cid,
+                            type="plaza_reply",
+                            title=f"{agent.name} also commented on a post you commented on",
+                            body=content[:150],
+                            link=f"/plaza?post={pid}",
+                            ref_id=pid,
+                            sender_name=agent.name,
+                        )
+            except Exception:
+                pass
+
+            # Extract @mentions
+            try:
+                import re
+                mentions = re.findall(r'@(\S+)', content)
+                if mentions:
+                    from app.services.notification_service import send_notification
+                    from app.models.user import User
+                    # Load agents in tenant
+                    a_q = select(AgentModel).where(AgentModel.id != agent_id)
+                    if agent.tenant_id:
+                        a_q = a_q.where(AgentModel.tenant_id == agent.tenant_id)
+                    a_map = {a.name.lower(): a for a in (await db.execute(a_q)).scalars().all()}
+                    notified_m = set()
+                    for m in mentions:
+                        ma = a_map.get(m.lower())
+                        if ma and ma.id not in notified_m:
+                            notified_m.add(ma.id)
+                            await send_notification(
+                                db, agent_id=ma.id,
+                                type="mention",
+                                title=f"{agent.name} mentioned you in a comment",
+                                body=content[:150],
+                                link=f"/plaza?post={pid}",
+                                ref_id=pid,
+                                sender_name=agent.name,
+                            )
+            except Exception:
+                pass
+
             await db.commit()
-            return f"✅ Comment added to post by {post.author_name}."
+            return f"Comment added to post by {post.author_name}."
 
     except Exception as e:
-        return f"❌ Failed to add comment: {str(e)[:200]}"
+        return f"Failed to add comment: {str(e)[:200]}"
 
 
 # ─── Code Execution ─────────────────────────────────────────────
@@ -3303,7 +4035,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                     private_key = agent_tool.config.get("private_key", "") or private_key
                     url_endpoint = agent_tool.config.get("url_endpoint", "") or url_endpoint
     except Exception as e:
-        print(f"[UploadImage] Config load error: {e}")
+        logger.error(f"[UploadImage] Config load error: {e}")
 
     if not private_key:
         return "❌ ImageKit Private Key not configured. Ask your admin to configure it in Enterprise Settings → Tools → Upload Image, or set it in your agent's tool config."
@@ -4273,7 +5005,7 @@ async def _feishu_calendar_create(agent_id: uuid.UUID, arguments: dict) -> str:
     if user_email:
         organizer_open_id = await _feishu_resolve_open_id(token, user_email)
         if not organizer_open_id:
-            print(f"[Feishu Calendar] Could not resolve open_id for '{user_email}', continuing without organizer invite")
+            logger.warning(f"[Feishu Calendar] Could not resolve open_id for '{user_email}', continuing without organizer invite")
 
     agent_cal_id, cal_err = await _get_agent_calendar_id(token)
     if not agent_cal_id:
@@ -4327,7 +5059,7 @@ async def _feishu_calendar_create(agent_id: uuid.UUID, arguments: dict) -> str:
                 attendee_open_ids.append(_oid)
                 attendee_display.append(aname)
         else:
-            print(f"[Calendar] Could not resolve attendee '{aname}': {_sr[:100]}")
+                logger.warning(f"[Calendar] Could not resolve attendee '{aname}': {_sr[:100]}")
 
     # 3. From explicit attendee_emails
     attendee_emails: list[str] = list(arguments.get("attendee_emails") or [])
@@ -4613,6 +5345,116 @@ async def _get_email_config(agent_id: uuid.UUID) -> dict:
         agent_config = (at.config or {}) if at else {}
         # Merge global + agent override
         return {**(tool.config or {}), **agent_config}
+
+
+# ── Pages: public HTML hosting ──────────────────────────
+
+async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, arguments: dict) -> str:
+    """Publish an HTML file as a public page."""
+    import secrets
+    import re
+
+    path = arguments.get("path", "")
+    if not path:
+        return "Missing required argument 'path'"
+
+    # Validate file extension
+    if not path.lower().endswith((".html", ".htm")):
+        return "Only .html and .htm files can be published"
+
+    # Resolve and check file exists
+    full_path = (ws / path).resolve()
+    if not str(full_path).startswith(str(ws.resolve())):
+        return "Path traversal not allowed"
+    if not full_path.exists() or not full_path.is_file():
+        return f"File not found: {path}"
+
+    # Extract title from HTML
+    try:
+        content = full_path.read_text(encoding="utf-8", errors="replace")
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", content, re.IGNORECASE | re.DOTALL)
+        title = title_match.group(1).strip()[:200] if title_match else full_path.stem
+    except Exception:
+        title = full_path.stem
+
+    # Generate short_id
+    short_id = secrets.token_urlsafe(6)[:8]  # 8-char URL-safe string
+
+    # Look up tenant_id
+    tenant_id = None
+    try:
+        from app.models.agent import Agent as _AgModel
+        async with async_session() as _db:
+            _r = await _db.execute(select(_AgModel.tenant_id).where(_AgModel.id == agent_id))
+            tenant_id = _r.scalar_one_or_none()
+    except Exception:
+        pass
+
+    # Create record
+    from app.models.published_page import PublishedPage
+    try:
+        async with async_session() as db:
+            page = PublishedPage(
+                short_id=short_id,
+                agent_id=agent_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                source_path=path,
+                title=title,
+            )
+            db.add(page)
+            await db.commit()
+    except Exception as e:
+        return f"Failed to publish: {e}"
+
+    # Build public URL using configured PUBLIC_BASE_URL
+    public_base = ""
+    try:
+        from app.models.system_settings import SystemSetting
+        async with async_session() as db2:
+            r = await db2.execute(
+                select(SystemSetting).where(SystemSetting.key == "platform")
+            )
+            setting = r.scalar_one_or_none()
+            if setting and setting.value and setting.value.get("public_base_url"):
+                raw = setting.value["public_base_url"].strip().rstrip("/")
+                if raw and not raw.startswith("http"):
+                    raw = f"https://{raw}"
+                public_base = raw
+    except Exception:
+        pass
+
+    url = f"{public_base}/p/{short_id}" if public_base else f"/p/{short_id}"
+
+    return f"Published successfully!\n\nPublic URL: {url}\nTitle: {title}\n\nAnyone can access this page without logging in."
+
+
+async def _list_published_pages(agent_id: uuid.UUID) -> str:
+    """List all published pages for this agent."""
+    from app.models.published_page import PublishedPage
+
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(PublishedPage)
+                .where(PublishedPage.agent_id == agent_id)
+                .order_by(PublishedPage.created_at.desc())
+            )
+            pages = result.scalars().all()
+
+        if not pages:
+            return "No published pages yet."
+
+        lines = [f"Published pages ({len(pages)} total):\n"]
+        for p in pages:
+            lines.append(f"- {p.title or 'Untitled'}")
+            lines.append(f"  URL: /p/{p.short_id}")
+            lines.append(f"  Source: {p.source_path}")
+            lines.append(f"  Views: {p.view_count}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to list pages: {e}"
 
 
 async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:

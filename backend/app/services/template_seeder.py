@@ -1,5 +1,6 @@
 """Seed default agent templates into the database on startup."""
 
+from loguru import logger
 from sqlalchemy import select, delete
 from app.database import async_session
 from app.models.agent import AgentTemplate
@@ -178,9 +179,9 @@ async def seed_agent_templates():
                     )
                     if ref_count.scalar() == 0:
                         await db.delete(old)
-                        print(f"[TemplateSeeder] Removed old template: {old.name}")
+                        logger.info(f"[TemplateSeeder] Removed old template: {old.name}")
                     else:
-                        print(f"[TemplateSeeder] Skipping delete of '{old.name}' (still referenced by agents)")
+                        logger.info(f"[TemplateSeeder] Skipping delete of '{old.name}' (still referenced by agents)")
 
             # Upsert new templates
             for tmpl in DEFAULT_TEMPLATES:
@@ -210,6 +211,6 @@ async def seed_agent_templates():
                         default_skills=tmpl["default_skills"],
                         default_autonomy_policy=tmpl["default_autonomy_policy"],
                     ))
-                    print(f"[TemplateSeeder] Created template: {tmpl['name']}")
+                    logger.info(f"[TemplateSeeder] Created template: {tmpl['name']}")
             await db.commit()
-            print("[TemplateSeeder] Agent templates seeded")
+            logger.info("[TemplateSeeder] Agent templates seeded")

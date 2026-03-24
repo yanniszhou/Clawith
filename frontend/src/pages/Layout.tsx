@@ -177,6 +177,21 @@ function AccountSettingsModal({ user, onClose, isChinese }: { user: any; onClose
     );
 }
 
+/* ────── Version Display (runtime) ────── */
+function VersionDisplay() {
+    const [info, setInfo] = useState<{ version?: string; commit?: string }>({});
+    useEffect(() => {
+        fetch('/api/version').then(r => r.json()).then(setInfo).catch(() => {});
+    }, []);
+    if (!info.version) return null;
+    return (
+        <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-quaternary)', marginTop: '8px', letterSpacing: '0.3px' }}>
+            v{info.version}
+            {info.commit && <span style={{ opacity: 0.6 }}> ({info.commit})</span>}
+        </div>
+    );
+}
+
 export default function Layout() {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
@@ -185,6 +200,8 @@ export default function Layout() {
     const isChinese = i18n.language?.startsWith('zh');
     const [showAccountSettings, setShowAccountSettings] = useState(false);
     const [showNotifications, setShowNotifications] = useState(false);
+    const [notifCategory, setNotifCategory] = useState<string>('all');
+    const [selectedNotification, setSelectedNotification] = useState<any | null>(null);
 
     // Notification polling
     const { data: unreadCount = 0 } = useQuery({
@@ -197,8 +214,8 @@ export default function Layout() {
         enabled: !!user,
     });
     const { data: notifications = [], refetch: refetchNotifications } = useQuery({
-        queryKey: ['notifications'],
-        queryFn: () => fetchJson<any[]>('/notifications?limit=30'),
+        queryKey: ['notifications', notifCategory],
+        queryFn: () => fetchJson<any[]>(`/notifications?limit=50${notifCategory !== 'all' ? `&category=${notifCategory}` : ''}`),
         enabled: !!user && showNotifications,
     });
     const markAllRead = async () => {
@@ -337,11 +354,15 @@ export default function Layout() {
                         const sortedAgents = [...agents].filter(filterAgent).sort((a: any, b: any) => {
                             const ap = pinnedAgents.has(a.id) ? 1 : 0;
                             const bp = pinnedAgents.has(b.id) ? 1 : 0;
-                            return bp - ap;
+                            if (ap !== bp) return bp - ap;
+                            // Sort by created_at descending (newest first)
+                            const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+                            const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+                            return bTime - aTime;
                         });
                         const renderAgent = (agent: any) => {
                             const badge = getAgentBadgeStatus(agent);
-                            const avatarChar = (agent.name || '?')[0].toUpperCase();
+                            const avatarChar = ((Array.from(agent.name || '?')[0] as string) || '?').toUpperCase();
                             return (
                             <div key={agent.id} style={{ position: 'relative' }} className={`sidebar-agent-item${agent.creator_id === user?.id ? ' owned' : ''}`}>
                                 <NavLink
@@ -351,7 +372,15 @@ export default function Layout() {
                                     style={{ paddingRight: '28px' }}
                                 >
                                     <span className="sidebar-item-icon" style={{ position: 'relative' }}>
-                                        <span className="agent-avatar">{avatarChar}</span>
+                                        <span className={`agent-avatar${agent.agent_type === 'openclaw' ? ' openclaw' : ''}`}>{avatarChar}</span>
+                                        {agent.agent_type === 'openclaw' && (
+                                            <span className="agent-avatar-link">
+                                                <svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                                                </svg>
+                                            </span>
+                                        )}
                                         {badge && <span className={`agent-avatar-badge ${badge}`} />}
                                     </span>
                                     <span className="sidebar-item-text">{agent.name}</span>
@@ -402,13 +431,13 @@ export default function Layout() {
                             </NavLink>
                         )}
                         {user && user.role === 'platform_admin' && (
-                            <NavLink to="/admin/companies" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`} title={t('nav.adminCompanies', 'Companies')}>
+                            <NavLink to="/admin/platform-settings" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`} title={t('nav.platformSettings', 'Platform Settings')}>
                                 <span className="sidebar-item-icon" style={{ display: 'flex' }}>
                                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <rect x="2" y="5" width="12" height="9" rx="1" /><path d="M5 5V3a2 2 0 012-2h2a2 2 0 012 2v2" />
+                                        <circle cx="8" cy="8" r="2.5" /><path d="M13.5 8a5.5 5.5 0 01-.3 1.8l1.3.8-.8 1.4-1.3-.8a5.5 5.5 0 01-1.5 1l.1 1.5H9.2l.1-1.5a5.5 5.5 0 01-1.5-1l-1.3.8-.8-1.4 1.3-.8A5.5 5.5 0 016.7 8a5.5 5.5 0 01.3-1.8l-1.3-.8.8-1.4 1.3.8a5.5 5.5 0 011.5-1L9.2 2.3h1.6l-.1 1.5a5.5 5.5 0 011.5 1l1.3-.8.8 1.4-1.3.8a5.5 5.5 0 01.5 1.8z" />
                                     </svg>
                                 </span>
-                                <span className="sidebar-item-text">{t('nav.adminCompanies', 'Companies')}</span>
+                                <span className="sidebar-item-text">{t('nav.platformSettings', 'Platform Settings')}</span>
                             </NavLink>
                         )}
                     </div>
@@ -449,9 +478,8 @@ export default function Layout() {
                             <button className="btn btn-ghost" onClick={toggleLang} style={{
                                 fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px',
                                 padding: '4px 8px',
-                            }}>
+                            }} title={i18n.language === 'zh' ? 'English' : '中文'}>
                                 {SidebarIcons.globe}
-                                <span>{i18n.language === 'zh' ? '中文' : 'EN'}</span>
                             </button>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -494,10 +522,7 @@ export default function Layout() {
                             </button>
                         </div>
                         {/* Version */}
-                        <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-quaternary)', marginTop: '8px', letterSpacing: '0.3px' }}>
-                            v{(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').split('+')[0]}
-                            <span style={{ opacity: 0.6 }}>{(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').includes('+') ? ` b${(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '').split('+')[1]}` : ''}</span>
-                        </div>
+                        <VersionDisplay />
                     </div>
                 </div>
             </nav>
@@ -510,14 +535,38 @@ export default function Layout() {
                     zIndex: 9999, display: 'flex', flexDirection: 'column',
                     boxShadow: '4px 0 24px rgba(0,0,0,0.15)', transition: 'left 0.2s',
                 }}>
-                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, flex: 1 }}>{isChinese ? '通知' : 'Notifications'}</h3>
-                        {(unreadCount as number) > 0 && (
-                            <button className="btn btn-ghost" onClick={markAllRead} style={{ fontSize: '11px', padding: '4px 8px' }}>
-                                {isChinese ? '全部已读' : 'Mark all read'}
-                            </button>
-                        )}
-                        <button className="btn btn-ghost" onClick={() => setShowNotifications(false)} style={{ padding: '4px 8px', fontSize: '16px', lineHeight: 1 }}>×</button>
+                    <div style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <div style={{ padding: '16px 20px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, flex: 1 }}>{isChinese ? '通知' : 'Notifications'}</h3>
+                            {(unreadCount as number) > 0 && (
+                                <button className="btn btn-ghost" onClick={markAllRead} style={{ fontSize: '11px', padding: '4px 8px' }}>
+                                    {isChinese ? '全部已读' : 'Mark all read'}
+                                </button>
+                            )}
+                            <button className="btn btn-ghost" onClick={() => setShowNotifications(false)} style={{ padding: '4px 8px', fontSize: '16px', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0', padding: '0 20px', marginTop: '12px' }}>
+                            {[
+                                { key: 'all', zh: '全部', en: 'All' },
+                                { key: 'tool', zh: '工具执行', en: 'Tool' },
+                                { key: 'approval', zh: '审批', en: 'Approval' },
+                                { key: 'social', zh: '社交', en: 'Social' },
+                            ].map(tab => (
+                                <button
+                                    key={tab.key}
+                                    onClick={() => { setNotifCategory(tab.key); }}
+                                    style={{
+                                        background: 'none', border: 'none', cursor: 'pointer',
+                                        padding: '6px 12px', fontSize: '12px', fontWeight: 500,
+                                        color: notifCategory === tab.key ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                                        borderBottom: notifCategory === tab.key ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                                        marginBottom: '-1px', transition: 'all 0.15s',
+                                    }}
+                                >
+                                    {isChinese ? tab.zh : tab.en}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                     <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
                         {(notifications as any[]).length === 0 && (
@@ -530,10 +579,14 @@ export default function Layout() {
                                 key={n.id}
                                 onClick={() => {
                                     if (!n.is_read) markOneRead(n.id);
-                                    if (n.link) { navigate(n.link); setShowNotifications(false); }
+                                    if (n.type === 'broadcast' || !n.link) {
+                                        setSelectedNotification(n);
+                                    } else if (n.link) {
+                                        navigate(n.link); setShowNotifications(false);
+                                    }
                                 }}
                                 style={{
-                                    padding: '12px 20px', cursor: n.link ? 'pointer' : 'default',
+                                    padding: '12px 20px', cursor: 'pointer',
                                     borderBottom: '1px solid var(--border-subtle)',
                                     background: n.is_read ? 'transparent' : 'var(--bg-secondary)',
                                     transition: 'background 0.15s',
@@ -557,6 +610,25 @@ export default function Layout() {
                 </div>
             )}
             {showNotifications && <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setShowNotifications(false)} />}
+            
+            {/* Notification Detail Modal */}
+            {selectedNotification && (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSelectedNotification(null)}>
+                    <div style={{ background: 'var(--bg-primary)', borderRadius: '12px', border: '1px solid var(--border-subtle)', width: '480px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>{selectedNotification.title}</h3>
+                            <button onClick={() => setSelectedNotification(null)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', fontSize: '20px', cursor: 'pointer', padding: '0' }}>×</button>
+                        </div>
+                        <div style={{ padding: '20px 24px', overflowY: 'auto', fontSize: '14px', lineHeight: '1.6', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+                            {selectedNotification.body || (isChinese ? '无详细内容' : 'No details provided')}
+                        </div>
+                        <div style={{ padding: '16px 24px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-tertiary)', fontSize: '12px' }}>
+                            <span>{selectedNotification.sender_name ? (isChinese ? `来自: ${selectedNotification.sender_name}` : `From: ${selectedNotification.sender_name}`) : ''}</span>
+                            <span>{selectedNotification.created_at ? new Date(selectedNotification.created_at).toLocaleString() : ''}</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <main className="main-content">
                 <Outlet />

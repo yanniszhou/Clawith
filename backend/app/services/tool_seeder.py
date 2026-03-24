@@ -1,5 +1,6 @@
 """Seed builtin tools into the database on startup."""
 
+from loguru import logger
 from sqlalchemy import select
 from app.database import async_session
 from app.models.tool import Tool
@@ -170,7 +171,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_channel_file",
         "display_name": "Send File",
-        "description": "Send a file to the user via the current communication channel (Feishu, Slack, Discord, or web).",
+        "description": "Send a file to a specific person or back to the current conversation. If member_name is provided, the system resolves the recipient across all connected channels (Feishu, Slack, etc.) and delivers the file via the appropriate channel.",
         "category": "communication",
         "icon": "📎",
         "is_default": True,
@@ -178,6 +179,8 @@ BUILTIN_TOOLS = [
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Workspace-relative path to the file"},
+                "member_name": {"type": "string", "description": "Name of the person to send the file to. The system looks up this person across all configured channels and delivers via the appropriate one."},
+                "message": {"type": "string", "description": "Optional message to accompany the file"},
             },
             "required": ["file_path"],
         },
@@ -235,6 +238,25 @@ BUILTIN_TOOLS = [
                 "msg_type": {"type": "string", "enum": ["chat", "task_request", "info_share"], "description": "Message type"},
             },
             "required": ["agent_name", "message"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "send_file_to_agent",
+        "display_name": "Agent File Transfer",
+        "description": "Send a workspace file to another digital employee. The file is copied to the target agent's workspace/inbox/files/ and an inbox note is created.",
+        "category": "communication",
+        "icon": "📤",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "agent_name": {"type": "string", "description": "Target agent name"},
+                "file_path": {"type": "string", "description": "Workspace-relative source file path"},
+                "message": {"type": "string", "description": "Optional delivery note"},
+            },
+            "required": ["agent_name", "file_path"],
         },
         "config": {},
         "config_schema": {},
@@ -832,6 +854,38 @@ BUILTIN_TOOLS = [
         "config": {},
         "config_schema": {},
     },
+    # --- Pages: public HTML hosting ---
+    {
+        "name": "publish_page",
+        "display_name": "Publish Page",
+        "description": "Publish an HTML file from workspace as a public page. Returns a public URL that anyone can access without login. Only .html/.htm files can be published.",
+        "category": "pages",
+        "icon": "🌐",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path in workspace, e.g. 'workspace/output.html'"},
+            },
+            "required": ["path"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "list_published_pages",
+        "display_name": "List Published Pages",
+        "description": "List all pages published by this agent, showing their public URLs and view counts.",
+        "category": "pages",
+        "icon": "📋",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {},
+        },
+        "config": {},
+        "config_schema": {},
+    },
 ]
 
 
@@ -862,7 +916,7 @@ async def seed_builtin_tools():
                 await db.flush()  # get tool.id
                 if t["is_default"]:
                     new_tool_ids.append(tool.id)
-                print(f"[ToolSeeder] Created builtin tool: {t['name']}")
+                logger.info(f"[ToolSeeder] Created builtin tool: {t['name']}")
             else:
                 # Sync fields that may evolve
                 updated_fields = []
@@ -884,8 +938,11 @@ async def seed_builtin_tools():
                 if not existing.config and t.get("config"):
                     existing.config = t["config"]
                     updated_fields.append("config")
+                if existing.parameters_schema != t["parameters_schema"]:
+                    existing.parameters_schema = t["parameters_schema"]
+                    updated_fields.append("parameters_schema")
                 if updated_fields:
-                    print(f"[ToolSeeder] Updated {', '.join(updated_fields)}: {t['name']}")
+                    logger.info(f"[ToolSeeder] Updated {', '.join(updated_fields)}: {t['name']}")
 
         # Auto-assign new default tools to all existing agents
         if new_tool_ids:
@@ -902,7 +959,7 @@ async def seed_builtin_tools():
                     )
                     if not check.scalar_one_or_none():
                         db.add(AgentTool(agent_id=agent_id, tool_id=tool_id, enabled=True))
-            print(f"[ToolSeeder] Auto-assigned {len(new_tool_ids)} new tools to {len(agent_ids)} agents")
+            logger.info(f"[ToolSeeder] Auto-assigned {len(new_tool_ids)} new tools to {len(agent_ids)} agents")
 
         # Remove obsolete tools that have been replaced
         OBSOLETE_TOOLS = ["bing_search", "read_webpage", "manage_tasks"]
@@ -911,10 +968,10 @@ async def seed_builtin_tools():
             obsolete = result.scalar_one_or_none()
             if obsolete:
                 await db.delete(obsolete)
-                print(f"[ToolSeeder] Removed obsolete tool: {obsolete_name}")
+                logger.info(f"[ToolSeeder] Removed obsolete tool: {obsolete_name}")
 
         await db.commit()
-        print("[ToolSeeder] Builtin tools seeded")
+        logger.info("[ToolSeeder] Builtin tools seeded")
 
 
 # ── Atlassian Rovo MCP Server Integration ──────────────────────────────────
@@ -985,7 +1042,7 @@ async def seed_atlassian_rovo_config():
             )
             db.add(tool)
             await db.commit()
-            print("[ToolSeeder] Created Atlassian Rovo config tool")
+            logger.info("[ToolSeeder] Created Atlassian Rovo config tool")
         else:
             updated = False
             if existing.config_schema != t["config_schema"]:
@@ -1000,7 +1057,7 @@ async def seed_atlassian_rovo_config():
                 updated = True
             if updated:
                 await db.commit()
-                print("[ToolSeeder] Updated Atlassian Rovo config tool")
+                logger.info("[ToolSeeder] Updated Atlassian Rovo config tool")
 
 
 async def get_atlassian_api_key() -> str:
@@ -1011,4 +1068,3 @@ async def get_atlassian_api_key() -> str:
         if tool and tool.config:
             return tool.config.get("api_key", "")
     return ""
-

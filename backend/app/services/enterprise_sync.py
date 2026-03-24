@@ -5,10 +5,10 @@ Agents pull latest data based on their roles and write to local enterprise_info/
 """
 
 import json
-import logging
 import uuid
 from pathlib import Path
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +18,6 @@ from app.models.agent import Agent
 from app.models.audit import EnterpriseInfo
 
 settings = get_settings()
-logger = logging.getLogger(__name__)
 
 # Redis channel for enterprise info updates
 ENTERPRISE_INFO_CHANNEL = "enterprise_info_updated"

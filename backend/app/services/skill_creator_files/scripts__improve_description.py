@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import anthropic
+from loguru import logger
 
 from scripts.utils import parse_skill_md
 
@@ -201,7 +202,7 @@ def main():
 
     skill_path = Path(args.skill_path)
     if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
+        logger.error(f"Error: No SKILL.md found at {skill_path}")
         sys.exit(1)
 
     eval_results = json.loads(Path(args.eval_results).read_text())
@@ -213,8 +214,8 @@ def main():
     current_description = eval_results["description"]
 
     if args.verbose:
-        print(f"Current: {current_description}", file=sys.stderr)
-        print(f"Score: {eval_results['summary']['passed']}/{eval_results['summary']['total']}", file=sys.stderr)
+        logger.info(f"Current: {current_description}")
+        logger.info(f"Score: {eval_results['summary']['passed']}/{eval_results['summary']['total']}")
 
     client = anthropic.Anthropic()
     new_description = improve_description(
@@ -228,7 +229,7 @@ def main():
     )
 
     if args.verbose:
-        print(f"Improved: {new_description}", file=sys.stderr)
+        logger.info(f"Improved: {new_description}")
 
     # Output as JSON with both the new description and updated history
     output = {

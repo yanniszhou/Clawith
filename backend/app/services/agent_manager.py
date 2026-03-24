@@ -1,7 +1,6 @@
 """Agent lifecycle manager — Docker container management for OpenClaw Gateway instances."""
 
 import json
-import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from string import Template
 
 import docker
 from docker.errors import DockerException, NotFound
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +18,6 @@ from app.models.agent import Agent
 from app.models.llm import LLMModel
 
 settings = get_settings()
-logger = logging.getLogger(__name__)
 
 
 class AgentManager:

@@ -3,6 +3,8 @@
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
+
 from app.database import async_session
 from app.models.activity_log import AgentActivityLog
 
@@ -26,4 +28,4 @@ async def log_activity(
             ))
             await db.commit()
     except Exception as e:
-        print(f"[ActivityLog] Failed to log {action_type}: {e}")
+        logger.error(f"[ActivityLog] Failed to log {action_type}: {e}")

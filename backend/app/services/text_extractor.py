@@ -7,6 +7,8 @@ Saves extracted text as a companion .txt file alongside the original.
 import io
 from pathlib import Path
 
+from loguru import logger
+
 
 # File extensions that need text extraction
 EXTRACTABLE_EXTS = {".pdf", ".docx", ".xlsx", ".pptx"}
@@ -39,7 +41,7 @@ def extract_text(file_bytes: bytes, filename: str) -> str | None:
         elif ext == ".pptx":
             return _extract_pptx(file_bytes)
     except Exception as e:
-        print(f"[TextExtractor] Failed to extract from {filename}: {e}")
+        logger.error(f"[TextExtractor] Failed to extract from {filename}: {e}")
         return None
     
     return None
@@ -57,7 +59,7 @@ def save_extracted_text(save_path: Path, file_bytes: bytes, filename: str) -> Pa
     
     txt_path = save_path.parent / f"{save_path.stem}.txt"
     txt_path.write_text(text, encoding="utf-8")
-    print(f"[TextExtractor] Extracted {len(text)} chars from {filename} → {txt_path.name}")
+    logger.info(f"[TextExtractor] Extracted {len(text)} chars from {filename} → {txt_path.name}")
     return txt_path
 
 

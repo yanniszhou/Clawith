@@ -4,10 +4,9 @@ Provides a single function to record token consumption against an Agent,
 used by web chat, heartbeat, triggers, and A2A communication.
 """
 
-import logging
 import uuid
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def estimate_tokens_from_chars(total_chars: int) -> int:

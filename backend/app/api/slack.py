@@ -6,6 +6,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,7 +184,7 @@ async def slack_event_webhook(
 
     import json
     body = json.loads(body_bytes)
-    print(f"[Slack] Webhook for {agent_id}: type={body.get('type')}")
+    logger.info(f"[Slack] Webhook for {agent_id}: type={body.get('type')}")
 
     # URL verification challenge
     if body.get("type") == "url_verification":
@@ -226,7 +227,7 @@ async def slack_event_webhook(
     sender_id = event.get("user", "")
     conv_id = f"slack_{channel_id}_{sender_id}" if channel_id else f"slack_dm_{sender_id}"
 
-    print(f"[Slack] Message from={sender_id}, channel={channel_id}: {user_text[:80]}")
+    logger.info(f"[Slack] Message from={sender_id}, channel={channel_id}: {user_text[:80]}")
 
     # Load history
     from app.models.audit import ChatMessage
@@ -267,7 +268,7 @@ async def slack_event_webhook(
                         or ""
                     )
         except Exception as _e_info:
-            print(f"[Slack] Failed to fetch user info for {sender_id}: {_e_info}")
+            logger.error(f"[Slack] Failed to fetch user info for {sender_id}: {_e_info}")
 
     if not _platform_user:
         _platform_user = _User(
@@ -333,9 +334,9 @@ async def slack_event_webhook(
                     raise ValueError(f"Got HTML response (SSO redirect) — Slack App needs 'files:read' scope. Content-Type: {_ct}")
                 (_upload_dir / _fname).write_bytes(_r.content)
             _file_user_messages.append(f"workspace/uploads/{_fname}")
-            print(f"[Slack] Saved file {_fname} ({len(_r.content)} bytes)")
+            logger.info(f"[Slack] Saved file {_fname} ({len(_r.content)} bytes)")
         except Exception as _e:
-            print(f"[Slack] Failed to download file {_fname}: {_e}")
+            logger.error(f"[Slack] Failed to download file {_fname}: {_e}")
 
 
     if not user_text and not _file_user_messages and slack_files:
@@ -408,7 +409,7 @@ async def slack_event_webhook(
     from app.api.feishu import _call_agent_llm
     reply_text = await _call_agent_llm(db, agent_id, user_text, history=history)
     _cfs_s.reset(_cfs_s_token)
-    print(f"[Slack] LLM reply: {reply_text[:80]}")
+    logger.info(f"[Slack] LLM reply: {reply_text[:80]}")
 
     # Save reply
     db.add(ChatMessage(agent_id=agent_id, user_id=platform_user_id, role="assistant", content=reply_text, conversation_id=session_conv_id))
@@ -421,6 +422,6 @@ async def slack_event_webhook(
         try:
             await _send_slack_messages(bot_token, channel_id, reply_text)
         except Exception as e:
-            print(f"[Slack] Failed to send: {e}")
+            logger.error(f"[Slack] Failed to send: {e}")
 
     return {"ok": True}

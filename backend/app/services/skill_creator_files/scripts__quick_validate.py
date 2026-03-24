@@ -9,6 +9,8 @@ import re
 import yaml
 from pathlib import Path
 
+from loguru import logger
+
 def validate_skill(skill_path):
     """Basic validation of a skill"""
     skill_path = Path(skill_path)
@@ -95,9 +97,12 @@ def validate_skill(skill_path):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python quick_validate.py <skill_directory>")
+        logger.info("Usage: python quick_validate.py <skill_directory>")
         sys.exit(1)
-    
+
     valid, message = validate_skill(sys.argv[1])
-    print(message)
+    if valid:
+        logger.info(message)
+    else:
+        logger.error(message)
     sys.exit(0 if valid else 1)

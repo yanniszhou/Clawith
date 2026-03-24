@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { agentApi, enterpriseApi, skillApi } from '../services/api';
+import { agentApi, channelApi, enterpriseApi, skillApi } from '../services/api';
 import ChannelConfig from '../components/ChannelConfig';
 
 const STEPS = ['basicInfo', 'personality', 'skills', 'permissions', 'channel'] as const;
@@ -74,8 +74,85 @@ export default function AgentCreate() {
             const agent = await agentApi.create(data);
             return agent;
         },
-        onSuccess: (agent) => {
+        onSuccess: async (agent) => {
             queryClient.invalidateQueries({ queryKey: ['agents'] });
+
+            // Automatically bind channels if configured in wizard
+            // Feishu
+            if (channelValues.feishu_app_id && channelValues.feishu_app_secret) {
+                try {
+                    await channelApi.create(agent.id, {
+                        channel_type: 'feishu',
+                        app_id: channelValues.feishu_app_id,
+                        app_secret: channelValues.feishu_app_secret,
+                        encrypt_key: channelValues.feishu_encrypt_key || undefined,
+                        extra_config: {
+                            connection_mode: channelValues.feishu_connection_mode || 'websocket'
+                        }
+                    });
+                } catch (err) {
+                    console.error('Failed to bind Feishu channel:', err);
+                    setError(
+                        'Failed to bind the Feishu channel. Please verify the Feishu configuration on the agent settings page and try again.'
+                    );
+                }
+            }
+
+            // Slack
+            if (channelValues.slack_bot_token && channelValues.slack_signing_secret) {
+                try {
+                    await channelApi.create(agent.id, {
+                        channel_type: 'slack',
+                        app_id: channelValues.slack_bot_token,
+                        app_secret: channelValues.slack_signing_secret,
+                    });
+                } catch (err) {
+                    console.error('Failed to bind Slack channel:', err);
+                    setError(
+                        'Failed to bind the Slack channel. Please verify the Slack configuration on the agent settings page and try again.'
+                    );
+                }
+            }
+
+            // Discord
+            if (channelValues.discord_bot_token && channelValues.discord_application_id) {
+                try {
+                    await channelApi.create(agent.id, {
+                        channel_type: 'discord',
+                        app_id: channelValues.discord_application_id,
+                        app_secret: channelValues.discord_bot_token,
+                        encrypt_key: channelValues.discord_public_key || undefined,
+                    });
+                } catch (err) {
+                    console.error('Failed to bind Discord channel:', err);
+                    setError(
+                        'Failed to bind the Discord channel. Please verify the Discord configuration on the agent settings page and try again.'
+                    );
+                }
+            }
+
+            // WeCom
+            if (channelValues.wecom_bot_id && channelValues.wecom_bot_secret) {
+                try {
+                    const connMode = channelValues.wecom_connection_mode || 'websocket';
+                    await channelApi.create(agent.id, {
+                        channel_type: 'wecom',
+                        app_id: connMode === 'websocket' ? channelValues.wecom_bot_id : undefined,
+                        app_secret: connMode === 'websocket' ? channelValues.wecom_bot_secret : undefined,
+                        extra_config: {
+                            connection_mode: connMode,
+                            bot_id: channelValues.wecom_bot_id,
+                            bot_secret: channelValues.wecom_bot_secret,
+                        }
+                    });
+                } catch (err) {
+                    console.error('Failed to bind WeCom channel:', err);
+                    setError(
+                        'Failed to bind the WeCom channel. Please verify the WeCom configuration on the agent settings page and try again.'
+                    );
+                }
+            }
+
             if (agent.api_key) {
                 setCreatedApiKey(agent.api_key);
             } else {
@@ -460,7 +537,7 @@ For humans, the message is delivered via their available channel (e.g. Feishu).`
                                             }}
                                         >
                                             <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>{tmpl.icon || tmpl.name?.[0] || '·'}</div>
-                                            <div style={{ fontSize: '12px', marginTop: '4px' }}>{tmpl.name}</div>
+                                            <div style={{ fontSize: '12px', marginTop: '4px' }}>{String(t(`wizard.templates.${tmpl.name}`, tmpl.name))}</div>
                                         </div>
                                     ))}
                                 </div>
@@ -468,7 +545,7 @@ For humans, the message is delivered via their available channel (e.g. Feishu).`
                                 {/* JSON Import */}
                                 <div style={{ marginTop: '8px' }}>
                                     <label className="btn btn-ghost" style={{ fontSize: '12px', cursor: 'pointer', color: 'var(--text-tertiary)' }}>
-                                        ↑ Import from JSON
+                                        ↑ {t('wizard.step1.importFromJson')}
                                         <input type="file" accept=".json" style={{ display: 'none' }} onChange={e => {
                                             const file = e.target.files?.[0];
                                             if (!file) return;
@@ -495,7 +572,7 @@ For humans, the message is delivered via their available channel (e.g. Feishu).`
                         )}
 
                         <div className="form-group">
-                            <label className="form-label">{t('agent.fields.name')} *</label>
+                            <label className="form-label">{t('agent.fields.name')} <span style={{ color: 'var(--error)' }}>*</span></label>
                             <input className={`form-input${fieldErrors.name ? ' input-error' : ''}`} value={form.name}
                                 onChange={(e) => { setForm({ ...form, name: e.target.value }); clearFieldError('name'); }}
                                 placeholder={t("wizard.step1.namePlaceholder")} autoFocus />
@@ -511,7 +588,7 @@ For humans, the message is delivered via their available channel (e.g. Feishu).`
 
                         {/* Model Selection */}
                         <div className="form-group">
-                            <label className="form-label">{t('wizard.step1.primaryModel')} *</label>
+                            <label className="form-label">{t('wizard.step1.primaryModel')} <span style={{ color: 'var(--error)' }}>*</span></label>
                             {models.length > 0 ? (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                     {models.filter((m: any) => m.enabled).map((m: any) => (

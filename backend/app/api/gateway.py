@@ -6,12 +6,12 @@ to poll for messages, report results, send messages, and send heartbeat pings.
 
 import asyncio
 import hashlib
-import logging
 import secrets
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Depends, BackgroundTasks
+from loguru import logger
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,6 @@ from app.schemas.schemas import (
     GatewayHistoryItem, GatewayRelationshipItem, GatewaySendMessageRequest,
 )
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 
@@ -35,14 +34,26 @@ def _hash_key(key: str) -> str:
 
 async def _get_agent_by_key(api_key: str, db: AsyncSession) -> Agent:
     """Authenticate an OpenClaw agent by its API key."""
-    key_hash = _hash_key(api_key)
+    # First try plaintext (new behavior)
     result = await db.execute(
         select(Agent).where(
-            Agent.api_key_hash == key_hash,
+            Agent.api_key_hash == api_key,
             Agent.agent_type == "openclaw",
         )
     )
     agent = result.scalar_one_or_none()
+
+    # Fallback to hashed (legacy behavior)
+    if not agent:
+        key_hash = _hash_key(api_key)
+        result = await db.execute(
+            select(Agent).where(
+                Agent.api_key_hash == key_hash,
+                Agent.agent_type == "openclaw",
+            )
+        )
+        agent = result.scalar_one_or_none()
+
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return agent
@@ -96,7 +107,7 @@ async def poll_messages(
     Returns all pending messages and marks them as delivered.
     Also updates openclaw_last_seen for online status tracking.
     """
-    print(f"[Gateway] poll called, key_prefix={x_api_key[:8]}...")
+    logger.info(f"[Gateway] poll called, key_prefix={x_api_key[:8]}...")
     agent = await _get_agent_by_key(x_api_key, db)
 
     # Update last seen
@@ -180,7 +191,7 @@ async def poll_messages(
     for r in h_result.scalars().all():
         if r.member:
             channels = []
-            if getattr(r.member, 'feishu_open_id', None):
+            if getattr(r.member, 'feishu_user_id', None) or getattr(r.member, 'feishu_open_id', None):
                 channels.append("feishu")
             if getattr(r.member, 'email', None):
                 channels.append("email")
@@ -223,7 +234,7 @@ async def report_result(
     """OpenClaw agent reports the result of a processed message."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
-    print(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
+    logger.info(f"[Gateway] report called, key_prefix={x_api_key[:8]}..., msg_id={body.message_id}")
     agent = await _get_agent_by_key(x_api_key, db)
 
     result = await db.execute(
@@ -244,15 +255,21 @@ async def report_result(
     agent.openclaw_last_seen = datetime.now(timezone.utc)
 
     # Save result as assistant chat message and push via WebSocket
-    # (only for user-originated messages; agent-to-agent skips this)
-    if body.result and msg.conversation_id and msg.sender_user_id:
+    # (works for both user-originated and agent-to-agent messages)
+    if body.result and msg.conversation_id:
         from app.models.audit import ChatMessage
+        from app.models.participant import Participant
+        # Look up OpenClaw agent's participant_id
+        part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == agent.id))
+        participant = part_r.scalar_one_or_none()
+        
         assistant_msg = ChatMessage(
             agent_id=agent.id,
-            user_id=msg.sender_user_id,
+            user_id=msg.sender_user_id or getattr(agent, "creator_id", agent.id),
             role="assistant",
             content=body.result,
             conversation_id=msg.conversation_id,
+            participant_id=participant.id if participant else None,
         )
         db.add(assistant_msg)
 
@@ -324,7 +341,7 @@ async def _send_to_agent_background(
     Accepts plain values (not ORM objects) to avoid stale session references
     since this runs after the request's DB session has closed.
     """
-    print(f"[Gateway] _send_to_agent_background started: {source_agent_name} -> {target_agent_name}")
+    logger.info(f"[Gateway] _send_to_agent_background started: {source_agent_name} -> {target_agent_name}")
     try:
         from app.api.websocket import call_llm
         from app.services.agent_context import build_agent_context
@@ -347,8 +364,9 @@ async def _send_to_agent_background(
             import uuid as _uuid
             _ns = _uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
             # Sort IDs so session is the same regardless of who initiates
-            sorted_ids = sorted([source_agent_id, target_agent_id])
-            session_uuid = _uuid.uuid5(_ns, f"{sorted_ids[0]}_{sorted_ids[1]}")
+            session_agent_id = min(source_agent_id, target_agent_id, key=str)
+            session_peer_id = max(source_agent_id, target_agent_id, key=str)
+            session_uuid = _uuid.uuid5(_ns, f"{session_agent_id}_{session_peer_id}")
             conv_id = str(session_uuid)
 
             # Find or create the ChatSession
@@ -360,11 +378,11 @@ async def _send_to_agent_background(
                 from datetime import datetime, timezone
                 session = ChatSession(
                     id=session_uuid,
-                    agent_id=target_agent_id,
+                    agent_id=session_agent_id,
                     user_id=target_creator_id,
                     title=f"{source_agent_name} ↔ {target_agent_name}",
                     source_channel="agent",
-                    peer_agent_id=source_agent_id,
+                    peer_agent_id=session_peer_id,
                     created_at=datetime.now(timezone.utc),
                 )
                 db.add(session)
@@ -389,6 +407,13 @@ async def _send_to_agent_background(
             system_prompt = await build_agent_context(
                 target_agent_id, target_agent_name, target_role_description
             )
+            system_prompt += (
+                "\n\n--- Agent-to-Agent Communication Alert ---\n"
+                f"You are receiving a direct message from another digital employee ({source_agent_name}). "
+                "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
+                "DO NOT use the `send_agent_message` tool to reply to this conversation. Just reply naturally in text.\n"
+                "If they are asking you to create or analyze a file, deliver the file using `send_file_to_agent` after writing it."
+            )
 
             # Load recent conversation history for context
             hist_result = await db.execute(
@@ -407,6 +432,14 @@ async def _send_to_agent_background(
             user_msg = f"[Message from agent: {source_agent_name}]\n{content}"
             messages.append({"role": "user", "content": user_msg})
 
+            from app.models.participant import Participant
+            
+            # Lookup participants for both agents
+            src_part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == source_agent_id))
+            tgt_part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == target_agent_id))
+            src_participant = src_part_r.scalar_one_or_none()
+            tgt_participant = tgt_part_r.scalar_one_or_none()
+            
             # Save user message to conversation
             db.add(ChatMessage(
                 agent_id=target_agent_id,
@@ -414,6 +447,7 @@ async def _send_to_agent_background(
                 role="user",
                 content=user_msg,
                 user_id=target_creator_id,
+                participant_id=src_participant.id if src_participant else None,
             ))
             await db.commit()
 
@@ -435,12 +469,17 @@ async def _send_to_agent_background(
 
         # Save assistant reply to conversation
         async with async_session() as db:
+            from app.models.participant import Participant
+            tgt_part_r = await db.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == target_agent_id))
+            tgt_participant = tgt_part_r.scalar_one_or_none()
+            
             db.add(ChatMessage(
                 agent_id=target_agent_id,
                 conversation_id=conv_id,
                 role="assistant",
                 content=final_reply,
                 user_id=target_creator_id,
+                participant_id=tgt_participant.id if tgt_participant else None,
             ))
 
             # Write reply to gateway_messages for source (OpenClaw) to poll
@@ -454,7 +493,7 @@ async def _send_to_agent_background(
             db.add(gw_reply)
             await db.commit()
 
-        print(f"[Gateway] Agent {target_agent_name} replied to {source_agent_name}")
+        logger.info(f"[Gateway] Agent {target_agent_name} replied to {source_agent_name}")
 
     except Exception as e:
         logger.error(f"[Gateway] send_to_agent_background failed: {e}")
@@ -487,7 +526,7 @@ async def send_message(
     )
     target_agent = result.scalars().first()
 
-    print(f"[Gateway] send_message: target='{target_name}', found_agent={target_agent.name if target_agent else None}, agent_type={getattr(target_agent, 'agent_type', None) if target_agent else None}, channel_hint='{channel_hint}'")
+    logger.info(f"[Gateway] send_message: target='{target_name}', found_agent={target_agent.name if target_agent else None}, agent_type={getattr(target_agent, 'agent_type', None) if target_agent else None}, channel_hint='{channel_hint}'")
 
     if target_agent and (not channel_hint or channel_hint == "agent"):
         conv_id = f"gw_agent_{agent.id}_{target_agent.id}"
@@ -564,7 +603,7 @@ async def send_message(
         )
 
     # Send via feishu if available
-    if target_member.feishu_open_id and (not channel_hint or channel_hint == "feishu"):
+    if (target_member.feishu_user_id or target_member.feishu_open_id) and (not channel_hint or channel_hint == "feishu"):
         from app.models.channel_config import ChannelConfig
         from app.services.feishu_service import feishu_service
         import json as _json
@@ -584,16 +623,27 @@ async def send_message(
             await db.commit()
             raise HTTPException(status_code=400, detail="No Feishu channel configured")
 
-        resp = await feishu_service.send_message(
-            config.app_id, config.app_secret,
-            receive_id=target_member.feishu_open_id,
-            msg_type="text",
-            content=_json.dumps({"text": content}, ensure_ascii=False),
-            receive_id_type="open_id",
-        )
+        # Prefer user_id (tenant-stable, works across apps), fallback to open_id
+        resp = None
+        if target_member.feishu_user_id:
+            resp = await feishu_service.send_message(
+                config.app_id, config.app_secret,
+                receive_id=target_member.feishu_user_id,
+                msg_type="text",
+                content=_json.dumps({"text": content}, ensure_ascii=False),
+                receive_id_type="user_id",
+            )
+        if (resp is None or resp.get("code") != 0) and target_member.feishu_open_id:
+            resp = await feishu_service.send_message(
+                config.app_id, config.app_secret,
+                receive_id=target_member.feishu_open_id,
+                msg_type="text",
+                content=_json.dumps({"text": content}, ensure_ascii=False),
+                receive_id_type="open_id",
+            )
         await db.commit()
 
-        if resp.get("code") == 0:
+        if resp and resp.get("code") == 0:
             return {
                 "status": "sent",
                 "target": target_member.name,
@@ -603,13 +653,13 @@ async def send_message(
         else:
             raise HTTPException(
                 status_code=502,
-                detail=f"Feishu send failed: {resp.get('msg')} (code {resp.get('code')})"
+                detail=f"Feishu send failed: {resp.get('msg') if resp else 'no ID available'} (code {resp.get('code') if resp else 'N/A'})"
             )
 
     await db.commit()
     raise HTTPException(
         status_code=400,
-        detail=f"No available channel to reach {target_member.name}. Available: feishu_open_id={'yes' if target_member.feishu_open_id else 'no'}"
+        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.feishu_user_id else 'no'}, feishu_open_id={'yes' if target_member.feishu_open_id else 'no'}"
     )
 
 

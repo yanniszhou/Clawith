@@ -13,6 +13,8 @@ import json
 import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+from loguru import logger
+
 
 class MCPClient:
     """Client for connecting to MCP servers via Streamable HTTP or SSE transport.
@@ -285,7 +287,7 @@ class MCPClient:
             self._transport = "streamable"
             return result
         except Exception as streamable_err:
-            print(f"[MCPClient] Streamable HTTP failed ({streamable_err}), trying SSE transport...")
+            logger.info(f"[MCPClient] Streamable HTTP failed ({streamable_err}), trying SSE transport...")
 
         # Fallback to SSE
         try:

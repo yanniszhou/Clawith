@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+from loguru import logger
+
 
 def generate_html(data: dict, auto_refresh: bool = False, skill_name: str = "") -> str:
     """Generate HTML report from loop output data. If auto_refresh is True, adds a meta refresh tag."""
@@ -317,7 +319,7 @@ def main():
 
     if args.output:
         Path(args.output).write_text(html_output)
-        print(f"Report written to {args.output}", file=sys.stderr)
+        logger.info(f"Report written to {args.output}")
     else:
         print(html_output)
 

@@ -6,14 +6,13 @@ and executes them by calling the LLM with the schedule's instruction.
 """
 
 import asyncio
-import logging
+import json
 import uuid
 from datetime import datetime, timezone
 
 from croniter import croniter
+from loguru import logger
 from sqlalchemy import select, update
-
-logger = logging.getLogger(__name__)
 
 
 def compute_next_run(cron_expr: str, after: datetime | None = None) -> datetime | None:
@@ -97,7 +96,7 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
                     response = await client.complete(
                         messages=messages,
                         tools=tools_for_llm if tools_for_llm else None,
-                        temperature=0.7,
+                        temperature=model.temperature,
                         max_tokens=get_max_tokens(model.provider, model.model, getattr(model, 'max_output_tokens', None)),
                     )
                 except LLMError as e:
@@ -122,12 +121,35 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
                         reasoning_content=response.reasoning_content,
                     ))
 
+                    # Tools that require arguments — if LLM sends empty args, skip and ask to retry
+                    _TOOLS_REQUIRING_ARGS = {
+                        "write_file", "read_file", "delete_file", "read_document",
+                        "send_message_to_agent", "send_feishu_message", "send_email",
+                        "web_search", "jina_search", "jina_read",
+                    }
+
                     for tc in response.tool_calls:
                         fn = tc["function"]
+                        tool_name = fn["name"]
+                        raw_args = fn.get("arguments", "{}")
+                        logger.info(f"[Scheduler] Raw arguments for {tool_name} (len={len(raw_args) if raw_args else 0}): {repr(raw_args[:300]) if raw_args else 'None'}")
                         try:
-                            args = json.loads(fn["arguments"]) if fn.get("arguments") else {}
-                        except Exception:
+                            args = json.loads(raw_args) if raw_args else {}
+                        except json.JSONDecodeError as je:
+                            logger.warning(f"[Scheduler] JSON parse failed for {tool_name}: {je}. Raw: {repr(raw_args[:200])}")
                             args = {}
+
+                        # Guard: if a tool that requires arguments received empty args,
+                        # return an error to LLM instead of executing
+                        if not args and tool_name in _TOOLS_REQUIRING_ARGS:
+                            logger.warning(f"[Scheduler] Empty arguments for {tool_name}, asking LLM to retry")
+                            messages.append(LLMMessage(
+                                role="tool",
+                                tool_call_id=tc["id"],
+                                content=f"Error: {tool_name} was called with empty arguments. You must provide the required parameters. Please retry with the correct arguments.",
+                            ))
+                            continue
+
                         tool_result = await execute_tool(fn["name"], args, agent_id, agent.creator_id)
                         messages.append(LLMMessage(
                             role="tool",

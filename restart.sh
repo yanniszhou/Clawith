@@ -53,7 +53,7 @@ load_env() {
     : "${DATABASE_URL:=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable}"
     export DATABASE_URL
 
-    # Parse host and port from DATABASE_URL (supports external DB)
+    # Parse host and port from DATABASE_URL regardless of hostname
     # Format: postgresql+asyncpg://user:pass@host:port/dbname?...
     _db_hostpart=$(echo "$DATABASE_URL" | sed 's|.*://[^@]*@||' | sed 's|/.*||' | sed 's|?.*||')
     PG_HOST="${_db_hostpart%%:*}"
