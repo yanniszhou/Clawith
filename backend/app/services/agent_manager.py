@@ -5,7 +5,6 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from string import Template
 
 import docker
 from docker.errors import DockerException, NotFound
@@ -107,7 +106,7 @@ class AgentManager:
             state = json.loads(state_path.read_text())
             state["agent_id"] = str(agent.id)
             state["name"] = agent.name
-            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
         logger.info(f"Initialized agent files at {agent_dir}")
 
@@ -154,7 +153,7 @@ class AgentManager:
         config = self._generate_openclaw_config(agent, model)
         config_dir = agent_dir / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "openclaw.json").write_text(json.dumps(config, indent=2))
+        (config_dir / "openclaw.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
         # Create workspace symlink
         workspace_dir = config_dir / "workspace"
@@ -237,16 +236,19 @@ class AgentManager:
             logger.error(f"Failed to remove container: {e}")
             return False
 
-    async def archive_agent_files(self, agent_id: uuid.UUID) -> None:
-        """Archive (move) agent files to a backup location."""
+    async def archive_agent_files(self, agent_id: uuid.UUID) -> Path:
+        """Archive agent files to a backup location and return the archive directory."""
         agent_dir = self._agent_dir(agent_id)
+        archive_dir = Path(settings.AGENT_DATA_DIR) / "_archived"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        dest = archive_dir / f"{agent_id}_{timestamp}"
         if agent_dir.exists():
-            archive_dir = Path(settings.AGENT_DATA_DIR) / "_archived"
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            dest = archive_dir / f"{agent_id}_{timestamp}"
             shutil.move(str(agent_dir), str(dest))
             logger.info(f"Archived agent files to {dest}")
+        else:
+            dest.mkdir(parents=True, exist_ok=True)
+        return dest
 
     def get_container_status(self, agent: Agent) -> dict:
         """Get real-time container status."""

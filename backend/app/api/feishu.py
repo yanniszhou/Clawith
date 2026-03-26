@@ -410,7 +410,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                                     _cache.write_text(_cj.dumps(
                                         {"ts": _ct.time(), "users": list(_users.values())},
                                         ensure_ascii=False,
-                                    ))
+                                    ), encoding="utf-8")
                                     import os as _os
                                     _os.chmod(str(_cache), 0o600)
                                 except Exception as _ce:

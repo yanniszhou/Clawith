@@ -276,6 +276,8 @@ async def search_clawhub(q: str, current_user: User = Depends(get_current_user))
             "displayName": r.get("displayName"),
             "summary": r.get("summary"),
             "score": r.get("score"),
+            "version": r.get("version"),
+            "updatedAt": r.get("updatedAt"),
         }
         for r in results
     ]

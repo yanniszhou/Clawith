@@ -298,6 +298,16 @@ function ThemeColorPicker() {
 
 
 
+// Preset common models per provider
+const PRESET_MODELS: Record<string, string[]> = {
+    'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'],
+    'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+    'google': ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash'],
+    'deepseek': ['deepseek-chat', 'deepseek-reasoner'],
+    'ollama': ['llama3.1', 'llama3.2', 'qwen2.5', 'mistral', 'gemma2'],
+    'azure': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+};
+
 // ─── Main Component ────────────────────────────────
 // ─── Enterprise KB Browser ─────────────────────────
 function EnterpriseKBBrowser({ onRefresh }: { onRefresh: () => void; refreshKey: number }) {
@@ -700,10 +710,12 @@ function SkillsTab() {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                                             <span style={{ fontWeight: 600, fontSize: '14px' }}>{r.displayName}</span>
                                             <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{r.slug}</span>
+                                            {r.version && <span style={{ fontSize: '10px', color: 'var(--accent-text)', background: 'var(--accent-subtle)', padding: '1px 6px', borderRadius: '4px' }}>v{r.version}</span>}
                                         </div>
                                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
                                             {r.summary?.slice(0, 160)}{r.summary?.length > 160 ? '...' : ''}
                                         </div>
+                                        {r.updatedAt && <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>Updated {new Date(r.updatedAt).toLocaleDateString()}</div>}
                                     </div>
                                     <button
                                         className="btn btn-secondary"
@@ -1084,6 +1096,34 @@ export default function EnterpriseSettings() {
     const [mcpTesting, setMcpTesting] = useState(false);
     const [editingToolId, setEditingToolId] = useState<string | null>(null);
     const [editingConfig, setEditingConfig] = useState<Record<string, any>>({});
+    const [configCategory, setConfigCategory] = useState<string | null>(null);
+
+    // Category-level config schemas: tools sharing the same key have config on category header
+    const GLOBAL_CATEGORY_CONFIG_SCHEMAS: Record<string, { title: string; fields: any[] }> = {
+        agentbay: {
+            title: 'AgentBay Settings',
+            fields: [
+                { key: 'api_key', label: 'API Key (from AgentBay)', type: 'password', placeholder: 'Enter your AgentBay API key' },
+            ],
+        },
+    };
+
+    // Labels for tool categories (mirrors AgentDetail getCategoryLabels)
+    const categoryLabels: Record<string, string> = {
+        file: t('agent.toolCategories.file'),
+        task: t('agent.toolCategories.task'),
+        communication: t('agent.toolCategories.communication'),
+        search: t('agent.toolCategories.search'),
+        aware: t('agent.toolCategories.aware', 'Aware & Triggers'),
+        social: t('agent.toolCategories.social', 'Social'),
+        code: t('agent.toolCategories.code', 'Code & Execution'),
+        discovery: t('agent.toolCategories.discovery', 'Discovery'),
+        email: t('agent.toolCategories.email', 'Email'),
+        feishu: t('agent.toolCategories.feishu', 'Feishu / Lark'),
+        custom: t('agent.toolCategories.custom'),
+        general: t('agent.toolCategories.general'),
+        agentbay: t('agent.toolCategories.agentbay', 'AgentBay'),
+    };
     const [toolsView, setToolsView] = useState<'global' | 'agent-installed'>('global');
     const [agentInstalledTools, setAgentInstalledTools] = useState<any[]>([]);
     const loadAllTools = async () => {
@@ -1290,7 +1330,35 @@ export default function EnterpriseSettings() {
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('enterprise.llm.model')}</label>
-                                        <input className="form-input" placeholder={t('enterprise.llm.modelPlaceholder')} value={modelForm.model} onChange={e => setModelForm({ ...modelForm, model: e.target.value })} />
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <select 
+                                                className="form-input" 
+                                                value={(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? 'custom' : modelForm.model} 
+                                                onChange={e => {
+                                                    if (e.target.value === 'custom') {
+                                                        setModelForm({ ...modelForm, model: '' });
+                                                    } else {
+                                                        setModelForm({ ...modelForm, model: e.target.value });
+                                                    }
+                                                }}
+                                                style={{ flex: (!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? '1' : '100%' }}
+                                            >
+                                                <option value="" disabled>Select a model</option>
+                                                {(PRESET_MODELS[modelForm.provider] || []).map(m => (
+                                                    <option key={m} value={m}>{m}</option>
+                                                ))}
+                                                <option value="custom">Custom (Type manually)</option>
+                                            </select>
+                                            {(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') && (
+                                                <input 
+                                                    className="form-input" 
+                                                    placeholder="Type model name" 
+                                                    value={modelForm.model} 
+                                                    onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
+                                                    style={{ flex: '2' }}
+                                                />
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('enterprise.llm.label')}</label>
@@ -1388,7 +1456,35 @@ export default function EnterpriseSettings() {
                                                 </div>
                                                 <div className="form-group">
                                                     <label className="form-label">{t('enterprise.llm.model')}</label>
-                                                    <input className="form-input" placeholder={t('enterprise.llm.modelPlaceholder')} value={modelForm.model} onChange={e => setModelForm({ ...modelForm, model: e.target.value })} />
+                                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                                        <select 
+                                                            className="form-input" 
+                                                            value={(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? 'custom' : modelForm.model} 
+                                                            onChange={e => {
+                                                                if (e.target.value === 'custom') {
+                                                                    setModelForm({ ...modelForm, model: '' });
+                                                                } else {
+                                                                    setModelForm({ ...modelForm, model: e.target.value });
+                                                                }
+                                                            }}
+                                                            style={{ flex: (!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? '1' : '100%' }}
+                                                        >
+                                                            <option value="" disabled>Select a model</option>
+                                                            {(PRESET_MODELS[modelForm.provider] || []).map(m => (
+                                                                <option key={m} value={m}>{m}</option>
+                                                            ))}
+                                                            <option value="custom">Custom (Type manually)</option>
+                                                        </select>
+                                                        {(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') && (
+                                                            <input 
+                                                                className="form-input" 
+                                                                placeholder="Type model name" 
+                                                                value={modelForm.model} 
+                                                                onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
+                                                                style={{ flex: '2' }}
+                                                            />
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <div className="form-group">
                                                     <label className="form-label">{t('enterprise.llm.label')}</label>
@@ -1924,132 +2020,230 @@ export default function EnterpriseSettings() {
                                 </div>
                             )}
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {allTools.map((tool: any) => {
-                                    const hasConfig = tool.config_schema?.fields?.length > 0;
-                                    const isEditing = editingToolId === tool.id;
-                                    return (
-                                        <div key={tool.id} className="card" style={{ padding: '0', overflow: 'hidden' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
-                                                    <span style={{ fontSize: '20px' }}>{tool.icon}</span>
-                                                    <div>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                            <span style={{ fontWeight: 500, fontSize: '13px' }}>{tool.display_name}</span>
-                                                            <span style={{ fontSize: '10px', background: tool.type === 'mcp' ? 'var(--primary)' : 'var(--bg-tertiary)', color: tool.type === 'mcp' ? '#fff' : 'var(--text-secondary)', borderRadius: '4px', padding: '1px 5px' }}>
-                                                                {tool.type === 'mcp' ? 'MCP' : 'Built-in'}
-                                                            </span>
-                                                            {tool.is_default && <span style={{ fontSize: '10px', background: 'rgba(0,200,100,0.15)', color: 'var(--success)', borderRadius: '4px', padding: '1px 5px' }}>Default</span>}
-                                                        </div>
-                                                        <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                                                            {tool.description?.slice(0, 60)}
-                                                            {tool.mcp_server_name && <span> · {tool.mcp_server_name}</span>}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                    {hasConfig && (
-                                                        <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={async () => {
-                                                            if (isEditing) {
-                                                                setEditingToolId(null);
-                                                            } else {
-                                                                setEditingToolId(tool.id);
-                                                                const cfg = { ...tool.config };
-                                                                // Pre-load jina api_key from system_settings
-                                                                if (tool.name === 'jina_search' || tool.name === 'jina_read') {
-                                                                    try {
-                                                                        const token = localStorage.getItem('token');
-                                                                        const res = await fetch('/api/enterprise/system-settings/jina_api_key', { headers: { Authorization: `Bearer ${token}` } });
-                                                                        const d = await res.json();
-                                                                        if (d.value?.api_key) cfg.api_key = d.value.api_key;
-                                                                    } catch { }
-                                                                }
-                                                                setEditingConfig(cfg);
-                                                            }
-                                                        }}>{isEditing ? t('enterprise.tools.collapse') : t('enterprise.tools.configure')}</button>
-                                                    )}
-                                                    {tool.type !== 'builtin' && (
-                                                        <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={async () => {
-                                                            if (!confirm(`${t('common.delete')} ${tool.display_name}?`)) return;
-                                                            await fetchJson(`/tools/${tool.id}`, { method: 'DELETE' });
-                                                            loadAllTools();
-                                                            loadAgentInstalledTools(); // cross-refresh in case it was also in agent-installed
-                                                        }}>{t('common.delete')}</button>
-                                                    )}
-                                                    <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '22px', cursor: 'pointer' }}>
-                                                        <input type="checkbox" checked={tool.enabled} onChange={async (e) => {
-                                                            await fetchJson(`/tools/${tool.id}`, { method: 'PUT', body: JSON.stringify({ enabled: e.target.checked }) });
-                                                            loadAllTools();
-                                                        }} style={{ opacity: 0, width: 0, height: 0 }} />
-                                                        <span style={{ position: 'absolute', inset: 0, background: tool.enabled ? '#22c55e' : 'var(--bg-tertiary)', borderRadius: '11px', transition: 'background 0.2s' }}>
-                                                            <span style={{ position: 'absolute', left: tool.enabled ? '20px' : '2px', top: '2px', width: '18px', height: '18px', background: '#fff', borderRadius: '50%', transition: 'left 0.2s' }} />
-                                                        </span>
-                                                    </label>
-                                                </div>
-                                            </div>
+                            {/* ─── Category-grouped tool list ─── */}
+                            {(() => {
+                                // Group tools by category (same pattern as AgentDetail.tsx)
+                                const grouped = allTools.reduce((acc: Record<string, any[]>, tool: any) => {
+                                    const cat = tool.category || 'general';
+                                    (acc[cat] = acc[cat] || []).push(tool);
+                                    return acc;
+                                }, {} as Record<string, any[]>);
 
-                                            {/* Config editing form */}
-                                            {isEditing && hasConfig && (
-                                                <div style={{ borderTop: '1px solid var(--border-color)', padding: '16px', background: 'var(--bg-secondary)' }}>
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                                        {(tool.config_schema.fields || []).map((field: any) => {
-                                                            // Check depends_on
-                                                            if (field.depends_on) {
-                                                                const visible = Object.entries(field.depends_on).every(([k, vals]: [string, any]) =>
-                                                                    vals.includes(editingConfig[k])
-                                                                );
-                                                                if (!visible) return null;
-                                                            }
+                                if (allTools.length === 0) {
+                                    return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)' }}>{t('enterprise.tools.emptyState')}</div>;
+                                }
+
+                                return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        {Object.entries(grouped).map(([category, catTools]) => {
+                                            const hasCategoryConfig = !!GLOBAL_CATEGORY_CONFIG_SCHEMAS[category];
+
+                                            return (
+                                                <div key={category}>
+                                                    {/* Category header */}
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                                            {categoryLabels[category] || category}
+                                                        </div>
+                                                        {hasCategoryConfig && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setConfigCategory(category);
+                                                                    setEditingConfig({});
+                                                                    // Load existing global config from the first tool in this category
+                                                                    const firstToolWithConfig = (catTools as any[]).find((tl: any) => tl.config_schema?.fields?.length > 0);
+                                                                    if (firstToolWithConfig?.config) {
+                                                                        setEditingConfig({ ...firstToolWithConfig.config });
+                                                                    }
+                                                                }}
+                                                                style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '3px 8px', fontSize: '11px', cursor: 'pointer', color: 'var(--text-secondary)' }}
+                                                                title={`Configure ${category}`}
+                                                            >Configure</button>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Tools in this category */}
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                        {(catTools as any[]).map((tool: any) => {
+                                                            // If this category has shared config, individual tool config buttons are hidden
+                                                            const hasOwnConfig = tool.config_schema?.fields?.length > 0 && !hasCategoryConfig;
+                                                            const isEditing = editingToolId === tool.id;
+
                                                             return (
-                                                                <div key={field.key}>
-                                                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '4px' }}>{field.label}</label>
-                                                                    {field.type === 'select' ? (
-                                                                        <select className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))}>
-                                                                            {(field.options || []).map((opt: any) => (
-                                                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                                                            ))}
-                                                                        </select>
-                                                                    ) : field.type === 'number' ? (
-                                                                        <input type="number" className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} min={field.min} max={field.max}
-                                                                            onChange={e => setEditingConfig(p => ({ ...p, [field.key]: Number(e.target.value) }))} />
-                                                                    ) : field.type === 'password' ? (
-                                                                        <input type="password" className="form-input" value={editingConfig[field.key] ?? ''} placeholder={field.placeholder || ''}
-                                                                            onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
-                                                                    ) : (
-                                                                        <input type="text" className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} placeholder={field.placeholder || ''}
-                                                                            onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
+                                                                <div key={tool.id} className="card" style={{ padding: '0', overflow: 'hidden' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px' }}>
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                                                                            <span style={{ fontSize: '18px' }}>{tool.icon}</span>
+                                                                            <div style={{ minWidth: 0 }}>
+                                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                                                    <span style={{ fontWeight: 500, fontSize: '13px' }}>{tool.display_name}</span>
+                                                                                    <span style={{ fontSize: '10px', background: tool.type === 'mcp' ? 'var(--primary)' : 'var(--bg-tertiary)', color: tool.type === 'mcp' ? '#fff' : 'var(--text-secondary)', borderRadius: '4px', padding: '1px 5px' }}>
+                                                                                        {tool.type === 'mcp' ? 'MCP' : 'Built-in'}
+                                                                                    </span>
+                                                                                    {tool.is_default && <span style={{ fontSize: '10px', background: 'rgba(0,200,100,0.15)', color: 'var(--success)', borderRadius: '4px', padding: '1px 5px' }}>Default</span>}
+                                                                                </div>
+                                                                                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                                    {tool.description?.slice(0, 80)}
+                                                                                    {tool.mcp_server_name && <span> · {tool.mcp_server_name}</span>}
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                                                            {/* Per-tool config button: only if the tool has its own schema AND is NOT part of a category config */}
+                                                                            {hasOwnConfig && (
+                                                                                <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={async () => {
+                                                                                    if (isEditing) {
+                                                                                        setEditingToolId(null);
+                                                                                    } else {
+                                                                                        setEditingToolId(tool.id);
+                                                                                        const cfg = { ...tool.config };
+                                                                                        // Pre-load jina api_key from system_settings
+                                                                                        if (tool.name === 'jina_search' || tool.name === 'jina_read') {
+                                                                                            try {
+                                                                                                const token = localStorage.getItem('token');
+                                                                                                const res = await fetch('/api/enterprise/system-settings/jina_api_key', { headers: { Authorization: `Bearer ${token}` } });
+                                                                                                const d = await res.json();
+                                                                                                if (d.value?.api_key) cfg.api_key = d.value.api_key;
+                                                                                            } catch { }
+                                                                                        }
+                                                                                        setEditingConfig(cfg);
+                                                                                    }
+                                                                                }}>{isEditing ? t('enterprise.tools.collapse') : t('enterprise.tools.configure')}</button>
+                                                                            )}
+
+                                                                            {/* Delete (non-builtin only) */}
+                                                                            {tool.type !== 'builtin' && (
+                                                                                <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={async () => {
+                                                                                    if (!confirm(`${t('common.delete')} ${tool.display_name}?`)) return;
+                                                                                    await fetchJson(`/tools/${tool.id}`, { method: 'DELETE' });
+                                                                                    loadAllTools();
+                                                                                    loadAgentInstalledTools();
+                                                                                }}>{t('common.delete')}</button>
+                                                                            )}
+
+                                                                            {/* Enable toggle */}
+                                                                            <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '22px', cursor: 'pointer', flexShrink: 0 }}>
+                                                                                <input type="checkbox" checked={tool.enabled} onChange={async (e) => {
+                                                                                    await fetchJson(`/tools/${tool.id}`, { method: 'PUT', body: JSON.stringify({ enabled: e.target.checked }) });
+                                                                                    loadAllTools();
+                                                                                }} style={{ opacity: 0, width: 0, height: 0 }} />
+                                                                                <span style={{ position: 'absolute', inset: 0, background: tool.enabled ? '#22c55e' : 'var(--bg-tertiary)', borderRadius: '11px', transition: 'background 0.2s' }}>
+                                                                                    <span style={{ position: 'absolute', left: tool.enabled ? '20px' : '2px', top: '2px', width: '18px', height: '18px', background: '#fff', borderRadius: '50%', transition: 'left 0.2s' }} />
+                                                                                </span>
+                                                                            </label>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Inline config editing form (per-tool only) */}
+                                                                    {isEditing && hasOwnConfig && (
+                                                                        <div style={{ borderTop: '1px solid var(--border-color)', padding: '16px', background: 'var(--bg-secondary)' }}>
+                                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                                                {(tool.config_schema.fields || []).map((field: any) => {
+                                                                                    // Check depends_on
+                                                                                    if (field.depends_on) {
+                                                                                        const visible = Object.entries(field.depends_on).every(([k, vals]: [string, any]) =>
+                                                                                            vals.includes(editingConfig[k])
+                                                                                        );
+                                                                                        if (!visible) return null;
+                                                                                    }
+                                                                                    return (
+                                                                                        <div key={field.key}>
+                                                                                            <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '4px' }}>{field.label}</label>
+                                                                                            {field.type === 'select' ? (
+                                                                                                <select className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))}>
+                                                                                                    {(field.options || []).map((opt: any) => (
+                                                                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                                                                    ))}
+                                                                                                </select>
+                                                                                            ) : field.type === 'number' ? (
+                                                                                                <input type="number" className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} min={field.min} max={field.max}
+                                                                                                    onChange={e => setEditingConfig(p => ({ ...p, [field.key]: Number(e.target.value) }))} />
+                                                                                            ) : field.type === 'password' ? (
+                                                                                                <input type="password" autoComplete="new-password" className="form-input" value={editingConfig[field.key] ?? ''} placeholder={field.placeholder || ''}
+                                                                                                    onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
+                                                                                            ) : (
+                                                                                                <input type="text" className="form-input" value={editingConfig[field.key] ?? field.default ?? ''} placeholder={field.placeholder || ''}
+                                                                                                    onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
+                                                                                            )}
+                                                                                        </div>
+                                                                                    );
+                                                                                })}
+                                                                                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                                                                                    <button className="btn btn-primary" onClick={async () => {
+                                                                                        if (tool.name === 'jina_search' || tool.name === 'jina_read') {
+                                                                                            // Save api_key to system_settings (shared by both jina tools)
+                                                                                            if (editingConfig.api_key) {
+                                                                                                const token = localStorage.getItem('token');
+                                                                                                await fetch('/api/enterprise/system-settings/jina_api_key', {
+                                                                                                    method: 'PUT',
+                                                                                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                                                                                    body: JSON.stringify({ value: { api_key: editingConfig.api_key } }),
+                                                                                                });
+                                                                                            }
+                                                                                        } else {
+                                                                                            await fetchJson(`/tools/${tool.id}`, { method: 'PUT', body: JSON.stringify({ config: editingConfig }) });
+                                                                                        }
+                                                                                        setEditingToolId(null);
+                                                                                        loadAllTools();
+                                                                                    }}>{t('enterprise.tools.saveConfig')}</button>
+                                                                                    <button className="btn btn-secondary" onClick={() => setEditingToolId(null)}>{t('common.cancel')}</button>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
                                                                     )}
                                                                 </div>
                                                             );
                                                         })}
-                                                        <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                                                            <button className="btn btn-primary" onClick={async () => {
-                                                                if (tool.name === 'jina_search' || tool.name === 'jina_read') {
-                                                                    // Save api_key to system_settings (shared by both jina tools)
-                                                                    if (editingConfig.api_key) {
-                                                                        const token = localStorage.getItem('token');
-                                                                        await fetch('/api/enterprise/system-settings/jina_api_key', {
-                                                                            method: 'PUT',
-                                                                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                                                            body: JSON.stringify({ value: { api_key: editingConfig.api_key } }),
-                                                                        });
-                                                                    }
-                                                                } else {
-                                                                    await fetchJson(`/tools/${tool.id}`, { method: 'PUT', body: JSON.stringify({ config: editingConfig }) });
-                                                                }
-                                                                setEditingToolId(null);
-                                                                loadAllTools();
-                                                            }}>{t('enterprise.tools.saveConfig')}</button>
-                                                            <button className="btn btn-secondary" onClick={() => setEditingToolId(null)}>{t('common.cancel')}</button>
-                                                        </div>
                                                     </div>
                                                 </div>
-                                            )}
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Category-level config modal */}
+                            {configCategory && GLOBAL_CATEGORY_CONFIG_SCHEMAS[configCategory] && (
+                                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                    onClick={() => setConfigCategory(null)}>
+                                    <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-primary)', borderRadius: '12px', padding: '24px', width: '480px', maxWidth: '95vw', maxHeight: '80vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                            <div>
+                                                <h3 style={{ margin: 0 }}>{GLOBAL_CATEGORY_CONFIG_SCHEMAS[configCategory].title}</h3>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '2px' }}>Global configuration shared by all tools in this category</div>
+                                            </div>
+                                            <button onClick={() => setConfigCategory(null)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: 'var(--text-secondary)' }}>x</button>
                                         </div>
-                                    );
-                                })}
-                                {allTools.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)' }}>{t('enterprise.tools.emptyState')}</div>}
-                            </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                            {GLOBAL_CATEGORY_CONFIG_SCHEMAS[configCategory].fields.map((field: any) => (
+                                                <div key={field.key}>
+                                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '4px' }}>{field.label}</label>
+                                                    {field.type === 'password' ? (
+                                                        <input type="password" autoComplete="new-password" className="form-input" value={editingConfig[field.key] ?? ''} placeholder={field.placeholder || ''}
+                                                            onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
+                                                    ) : (
+                                                        <input type="text" className="form-input" value={editingConfig[field.key] ?? ''} placeholder={field.placeholder || ''}
+                                                            onChange={e => setEditingConfig(p => ({ ...p, [field.key]: e.target.value }))} />
+                                                    )}
+                                                </div>
+                                            ))}
+                                            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
+                                                <button className="btn btn-secondary" onClick={() => setConfigCategory(null)}>{t('common.cancel')}</button>
+                                                <button className="btn btn-primary" onClick={async () => {
+                                                    // Save config to all tools in this category that have config_schema
+                                                    const catTools = allTools.filter((tl: any) => (tl.category || 'general') === configCategory && tl.config_schema?.fields?.length > 0);
+                                                    for (const tl of catTools) {
+                                                        await fetchJson(`/tools/${tl.id}`, { method: 'PUT', body: JSON.stringify({ config: editingConfig }) });
+                                                    }
+                                                    setConfigCategory(null);
+                                                    loadAllTools();
+                                                }}>{t('common.save', 'Save')}</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </>}
                     </div>
                 )}
