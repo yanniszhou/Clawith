@@ -86,11 +86,47 @@
     "usernamePlaceholder": "请输入用户名",
     "passwordPlaceholder": "请输入密码",
     "emailPlaceholder": "your@email.com",
+    "forgotPassword": "忘记密码？",
+    "forgotPasswordTitle": "忘记密码",
+    "forgotPasswordSubtitle": "输入你的账号邮箱；如果该账号存在，系统会发送一封重置链接邮件。",
+    "forgotEmailHint": "忘记使用的邮箱了？",
+    "emailHintResult": "邮箱提示",
+    "emailHintFailed": "获取邮箱提示失败。您的账号可能不存在。",
+    "getEmailHint": "获取提示",
+    "usernamePlaceholderHint": "请输入你的账号用户名",
+    "forgotPasswordRequestFailed": "请求密码重置失败",
+    "sendResetLink": "发送重置链接",
+    "rememberedPassword": "想起密码了？",
+    "backToLogin": "返回登录",
+    "resetPasswordTitle": "重置密码",
+    "resetPasswordSubtitle": "为你的账号设置一个新密码。",
+    "resetPasswordMissingToken": "链接中缺少重置令牌。",
+    "resetPasswordTooShort": "新密码至少需要 6 个字符。",
+    "resetPasswordMismatch": "两次输入的密码不一致。",
+    "resetPasswordFailed": "重置密码失败",
+    "resetPasswordSuccess": "密码已更新，正在跳转到登录页...",
+    "newPassword": "新密码",
+    "newPasswordPlaceholder": "至少 6 个字符",
+    "confirmNewPassword": "确认新密码",
+    "confirmNewPasswordPlaceholder": "再次输入新密码",
+    "updatePassword": "更新密码",
+    "emailPlaceholderReset": "name@company.com",
     "companyDisabled": "你的公司已被停用，请联系平台管理员。",
     "invalidCredentials": "用户名或密码错误。",
     "accountDisabled": "你的账号已被停用。",
+    "notInOrganization": "该账号不属于当前组织。",
     "serverStarting": "服务正在启动或遇到问题，请稍后重试。",
-    "serverUnreachable": "无法连接服务器，请检查服务是否正在运行。"
+    "serverUnreachable": "无法连接服务器，请检查服务是否正在运行。",
+    "checkEmailVerification": "注册成功！请检查邮箱并点击验证链接完成邮箱验证。",
+    "qrLogin": "扫码登录",
+    "unifiedSSO": "统一扫码登录",
+    "scanWithPlatform": "请使用 飞书 / 钉钉 / 企业微信 扫码",
+    "qrExpired": "二维码已过期",
+    "qrSuccess": "登录成功，正在跳转...",
+    "refresh": "刷新二维码",
+    "loginWithSSO": "使用企业 SSO 登录",
+    "ssoNotice": "此域名已启用企业单点登录 (SSO)。",
+    "standardLogin": "标准登录"
   },
   "roles": {
     "platformAdmin": "超级管理员",
@@ -104,7 +140,8 @@
     "companyName": "公司名称",
     "create": "创建",
     "myCompany": "我的公司",
-    "logout": "退出"
+    "logout": "退出",
+    "language": "语言"
   },
   "dashboard": {
     "greeting": {
@@ -199,7 +236,7 @@
       "title": "🤖 模型配置",
       "model": "🧠 模型",
       "provider": "🏢 提供商",
-      "contextRounds": "🔄 上下文轮次"
+      "contextRounds": "🔄 上下文窗口"
     },
     "actions": {
       "start": "启动",
@@ -366,9 +403,9 @@
       "primaryModel": "主模型",
       "fallbackModel": "备选模型",
       "noFallback": "无备选",
-      "conversationContext": "对话上下文",
-      "maxRounds": "最大对话轮次",
-      "roundsDesc": "每次对话最多进行的 LLM 调用轮次",
+      "conversationContext": "上下文窗口",
+      "maxRounds": "上下文窗口大小",
+      "roundsDesc": "每次 LLM 请求时携带的近期历史消息数量",
       "tokenLimits": "Token 用量限制",
       "dailyLimit": "每日上限",
       "monthlyLimit": "每月上限",
@@ -415,6 +452,8 @@
         "encryptKey": "Encrypt Key",
         "webhookUrl": "Webhook URL",
         "configured": "已配置",
+      "usingCompanyKey": "🏢 使用公司主密钥 ({{val}})",
+      "usingCompanyConfig": "🏢 使用公司默认配置 ({{val}})",
         "notConfigured": "未配置",
         "saveChannel": "保存配置",
         "syncHint": "在配置飞书机器人之前，请先在企业设置 → 组织架构中同步您的组织结构。这确保机器人能够识别消息发送者。"
@@ -491,7 +530,13 @@
     },
     "tools": {
       "platformTools": "平台预置工具",
-      "agentInstalled": "数字员工自行安装的工具"
+      "companyTools": "公司配置工具",
+      "agentInstalled": "数字员工自行安装的工具",
+      "noInstalled": "暂无自行安装的工具",
+      "noCompany": "暂无公司统一配置的工具",
+      "configured": "已配置",
+      "usingCompanyKey": "🏢 使用公司主密钥 ({{val}})",
+      "usingCompanyConfig": "🏢 使用公司默认配置 ({{val}})"
     },
     "toolCategories": {
       "file": "文件操作",
@@ -642,6 +687,19 @@
       "title": "公司时区",
       "description": "所有数字员工的默认时区。数字员工可以单独覆盖。"
     },
+    "systemEmail": {
+      "title": "系统邮件配置",
+      "description": "配置 SMTP 设置以发送系统邮件，如密码重置和通知。",
+      "fromAddress": "发件人邮箱地址",
+      "fromName": "发件人名称",
+      "smtpHost": "SMTP 主机",
+      "smtpPort": "SMTP 端口",
+      "username": "SMTP 用户名",
+      "password": "SMTP 密码 / 应用密码",
+      "timeout": "超时时间（秒）",
+      "useSsl": "使用 SSL/TLS",
+      "hint": "对于 Gmail，请使用应用密码。对于 QQ/163 邮箱，请使用 SMTP 授权码。"
+    },
     "quotas": {
       "defaultUserQuotas": "默认用户配额",
       "defaultsApply": "这些默认设置适用于新注册的用户。现有用户不受影响。",
@@ -674,7 +732,7 @@
     "tabs": {
       "llm": "模型池",
       "tools": "工具",
-      "org": "组织架构",
+      "org": "组织管理",
       "info": "公司信息",
       "audit": "审计日志",
       "config": "平台配置",
@@ -683,7 +741,8 @@
       "skills": "技能管理",
       "quotas": "配额",
       "users": "用户",
-      "invites": "邀请码"
+      "invites": "邀请码",
+      "identity": "OA管理"
     },
     "invites": {
       "pageTitle": "邀请码",
@@ -723,6 +782,9 @@
       "maxOutputTokens": "最大输出 Token",
       "maxOutputTokensPlaceholder": "提供商默认",
       "maxOutputTokensDesc": "覆盖默认的输出 Token 限制。从提供商自动填充；根据需要调整。",
+      "requestTimeout": "请求超时（秒）",
+      "requestTimeoutPlaceholder": "留空使用默认 120 (建议本地模型填 300+)",
+      "requestTimeoutDesc": "覆盖默认的接口超时时间。大参数量或本地部署模型推理较慢时建议调大。",
       "enabled": "启用",
       "disabled": "禁用",
       "save": "保存",
@@ -813,7 +875,36 @@
       "searchMembers": "搜索成员...",
       "member": "成员",
       "admin": "管理员",
-      "noMembers": "暂无成员"
+      "noMembers": "暂无成员",
+      "syncSetupGuide": "配置说明与权限声明",
+      "feishuGuideText": "在飞书开发者后台，进入「权限管理」->「批量导入/导出权限」，粘贴以下 JSON：",
+      "feishuGuideWarning": "注意：添加权限后，必须创建并发布应用新版本，并在企业后台审批通过后，权限才会生效。",
+      "syncGuide": {
+        "feishu": {
+          "step1": "打开 open.feishu.cn → 登录 → 开发者后台 → 创建企业自建应用",
+          "step2": "左侧菜单 → 凭证与基础信息 → 复制 App ID 和 App Secret，填入下方并保存配置",
+          "step3": "左侧菜单 → 权限管理 → 点击「批量导入/导出权限」→ 粘贴下方权限 JSON → 确认导入",
+          "step4": "【如需免登】左侧菜单 → 添加应用能力 → 找到「网页应用」→ 点击添加，将下方的 SSO Login URL 填入「桌面端主页」和「移动端主页」",
+          "step5": "【如需免登】左侧菜单 → 安全设置 → 在「重定向 URL」中添加下方的 Redirect URL",
+          "step6": "【如需免登】打开下方的“SSO登录”开关，团队成员即可通过 SSO Login URL 一键免登",
+          "step7": "左侧菜单 → 版本管理与发布 → 创建版本（可用范围设为所有员工）→ 提交审核发布 → 在飞书管理后台审批通过"
+        },
+        "dingtalk": {
+          "step1": "打开 open.dingtalk.com → 登录 → 开发者后台 → 创建企业内部应用 → 填写名称",
+          "step2": "应用能力 → 找到「通讯录」→ 点击添加",
+          "step3": "应用信息 → 复制 AppKey 和 AppSecret",
+          "step4": "通讯录权限 → 勾选部门和成员的读取权限",
+          "step5": "将 AppKey 和 AppSecret 填入下方 → 点击保存配置",
+          "step6": "如需使用钉钉免登：打开下方的SSO登录开关，然后在钉钉中配置：登录与分享 → 填写回调域名（即下方的 Redirect URL 的域名）。分享下方的 SSO Login URL 给团队成员，他们即可一键登录。"
+        },
+        "wecom": {
+          "step1": "登录企业微信管理后台 → 管理工具 → 通讯录同步",
+          "step2": "API 安全 → 设置 API 可见范围，包含你想同步的部门或成员",
+          "step3": "复制企业 ID (CorpID) 和 Secret",
+          "step4": "将 CorpID 和 Secret 填入下方 → 点击保存配置",
+          "step5": "如需使用企微免登：打开下方的SSO登录开关，然后在企微中配置：应用管理 → 网页授权及JS-SDK → 设置可信域名（即下方 Redirect URL 的域名部分）。分享下方的 SSO Login URL 给团队成员即可登录。"
+        }
+      }
     },
     "config": {
       "title": "平台配置",
@@ -825,6 +916,15 @@
       "save": "保存",
       "saved": "已保存",
       "themeColor": "主题色"
+    },
+    "broadcast": {
+      "title": "广播通知",
+      "description": "向本公司所有用户和数字员工发送通知。",
+      "titlePlaceholder": "通知标题",
+      "bodyPlaceholder": "可选补充说明...",
+      "sendEmail": "同时给已配置邮箱地址的用户发送邮件",
+      "send": "发送广播",
+      "sentWithEmail": "已发送给 {{users}} 位用户、{{agents}} 个数字员工，并投递到 {{emails}} 个邮箱"
     },
     "companyName": {
       "title": "公司名称",
@@ -930,9 +1030,14 @@
     "active": "正常",
     "disabled": "已停用",
     "disable": "停用",
-    "enable": "启用",
+    "editCompany": "编辑公司",
+    "ssoConfigTitle": "SSO 与域名配置",
+    "ssoConfigDesc": "为公司开启 SSO 登录并设置专属访问域名。开启后，用户访问该域名将自动进入该公司的 SSO 流程。",
+    "ssoEnabled": "启用 SSO",
+    "ssoDomain": "专属访问域名",
+    "ssoDomainPlaceholder": "例如: acme.clawith.com",
     "confirmDisable": "停用此公司？所有用户和数字员工将被暂停。",
-    "createdAt": "创建时间",
+
     "showing": "{{start}}-{{end}} / {{total}}",
     "prev": "上一页",
     "next": "下一页"
@@ -978,6 +1083,10 @@
   "channelGuide": {
     "setupGuide": "配置说明",
     "feishuPermJson": "权限批量导入 JSON",
+    "feishuPermBasic": "基础权限",
+    "feishuPermFull": "全量权限",
+    "feishuPermBasicDesc": "仅聊天和消息收发",
+    "feishuPermFullDesc": "包含文档、云空间、多维表格、日历、审批等全部功能",
     "feishuPermCopy": "复制",
     "feishuPermCopied": "✓ 已复制",
     "slack": {
@@ -1062,5 +1171,21 @@
       "ws_step6": "在企业微信中找到机器人，发送消息测试",
       "ws_note": "WebSocket 长连接模式无需公网 IP、回调地址或域名备案（ICP），连接由系统自动管理。"
     }
+  },
+  "identity": {
+    "title": "组织架构与账号同步",
+    "addProvider": "添加同步源",
+    "type": "类型",
+    "name": "显示名称",
+    "config": "配置 (JSON)",
+    "configExample": "配置示例",
+    "deleteConfirm": "确定删除此 OA 账号源吗？",
+    "providerHints": {
+      "feishu": "飞书：需填写 app_id, app_secret（可选：encrypt_key, verification_token）",
+      "dingtalk": "钉钉：需填写 app_key, app_secret",
+      "wecom": "企业微信：传统模式需 corp_id, secret, agent_id；智能机器人模式需 bot_id, bot_secret",
+      "oauth2": "OAuth2：填写 App ID、App Secret、授权地址、Token地址、用户信息地址",
+      "saml": "SAML：需填写 entry_point, issuer, cert (公钥)",
+      "microsoft_teams": "Microsoft Teams：需填写 client_id, client_secret, tenant_id"    }
   }
 }

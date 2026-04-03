@@ -263,10 +263,10 @@ BUILTIN_TOOLS = [
     },
     {
         "name": "web_search",
-        "display_name": "DuckDuckGo Search",
-        "description": "Search the internet via DuckDuckGo. May be unavailable on some networks. Use Bing Search as an alternative.",
+        "display_name": "Web Search",
+        "description": "Search the internet using a configurable search engine. Supports DuckDuckGo (free), Tavily, Google, and Bing. Configure the search engine in the tool settings.",
         "category": "search",
-        "icon": "🦆",
+        "icon": "🔍",
         "is_default": True,
         "parameters_schema": {
             "type": "object",
@@ -436,7 +436,7 @@ BUILTIN_TOOLS = [
     {
         "name": "execute_code",
         "display_name": "Code Executor",
-        "description": "Execute code (Python, Bash, Node.js) in a sandboxed environment within the agent's workspace. Useful for data processing, calculations, file transformations, and automation.",
+        "description": "Execute code (Python, Bash, Node.js) in a local sandboxed subprocess within the agent's workspace. Useful for data processing, calculations, file transformations, and automation.",
         "category": "code",
         "icon": "💻",
         "is_default": True,
@@ -451,34 +451,14 @@ BUILTIN_TOOLS = [
         },
         "config": {
             "sandbox_type": "subprocess",
-            "api_key": "",
-            "api_url": "",
             "cpu_limit": "0.5",
             "memory_limit": "256m",
-            "allow_network": False,
+            "allow_network": True,
             "default_timeout": 30,
             "max_timeout": 60,
         },
         "config_schema": {
             "fields": [
-                {
-                    "key": "sandbox_type",
-                    "label": "Sandbox Type",
-                    "type": "select",
-                    "options": [
-                        {"value": "subprocess", "label": "Local (subprocess)"},
-                        {"value": "e2b", "label": "E2B (cloud)"},
-                    ],
-                    "default": "subprocess",
-                },
-                {
-                    "key": "api_key",
-                    "label": "API Key",
-                    "type": "password",
-                    "default": "",
-                    "placeholder": "Required for cloud/API sandboxes",
-                    "depends_on": {"sandbox_type": ["e2b"]},
-                },
                 {
                     "key": "cpu_limit",
                     "label": "CPU Limit",
@@ -497,8 +477,7 @@ BUILTIN_TOOLS = [
                     "key": "allow_network",
                     "label": "Allow Network Access",
                     "type": "checkbox",
-                    "default": False,
-                    "depends_on": {"sandbox_type": ["subprocess"]},
+                    "default": True,
                     "read_only_for_roles": ["agent_admin", "member"],
                 },
                 {
@@ -520,6 +499,58 @@ BUILTIN_TOOLS = [
             ]
         },
     },
+    {
+        "name": "execute_code_e2b",
+        "display_name": "Code Executor (E2B Cloud)",
+        "description": "Execute code (Python, Bash, Node.js) in a secure E2B cloud sandbox. Provides full network access and an isolated environment without consuming local resources. Requires an E2B API key.",
+        "category": "code",
+        "icon": "☁️",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "language": {"type": "string", "enum": ["python", "bash", "node"], "description": "Programming language"},
+                "code": {"type": "string", "description": "Code to execute"},
+                "timeout": {"type": "integer", "description": "Max execution time in seconds (default 30, max 60)"},
+            },
+            "required": ["language", "code"],
+        },
+        "config": {
+            "sandbox_type": "e2b",
+            "api_key": "",
+            "default_timeout": 30,
+            "max_timeout": 60,
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "api_key",
+                    "label": "E2B API Key",
+                    "type": "password",
+                    "default": "",
+                    "placeholder": "Get your API key at https://e2b.dev",
+                    "required": True,
+                },
+                {
+                    "key": "default_timeout",
+                    "label": "Default Timeout (seconds)",
+                    "type": "number",
+                    "default": 30,
+                    "min": 5,
+                    "max": 300,
+                },
+                {
+                    "key": "max_timeout",
+                    "label": "Max Timeout (seconds)",
+                    "type": "number",
+                    "default": 60,
+                    "min": 10,
+                    "max": 300,
+                },
+            ]
+        },
+    },
+
     {
         "name": "upload_image",
         "display_name": "Upload Image",
@@ -552,6 +583,147 @@ BUILTIN_TOOLS = [
                     "type": "text",
                     "default": "",
                     "placeholder": "https://ik.imagekit.io/your_imagekit_id",
+                },
+            ]
+        },
+    },
+    {
+        "name": "generate_image_siliconflow",
+        "display_name": "Generate Image (SiliconFlow)",
+        "description": "Generate an image via SiliconFlow FLUX models. China-friendly and fast.",
+        "category": "media",
+        "icon": "🎨",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Detailed image description."},
+                "size": {"type": "string", "description": "Image size (e.g. 1024x1024, 1024x768). Default 1024x1024."},
+                "save_path": {"type": "string", "description": "Save path in workspace. Default: auto."},
+            },
+            "required": ["prompt"],
+        },
+        "config": {
+            "model": "black-forest-labs/FLUX.1-schnell",
+            "api_key": "",
+            "base_url": "",
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "model",
+                    "label": "Model",
+                    "type": "text",
+                    "default": "black-forest-labs/FLUX.1-schnell",
+                    "placeholder": "e.g. black-forest-labs/FLUX.1-schnell",
+                },
+                {
+                    "key": "api_key",
+                    "label": "API Key",
+                    "type": "password",
+                    "default": "",
+                    "placeholder": "SiliconFlow API Key",
+                },
+                {
+                    "key": "base_url",
+                    "label": "Base URL (optional)",
+                    "type": "text",
+                    "default": "",
+                    "placeholder": "Default: https://api.siliconflow.cn/v1",
+                },
+            ]
+        },
+    },
+    {
+        "name": "generate_image_openai",
+        "display_name": "Generate Image (OpenAI)",
+        "description": "Generate an image via OpenAI DALL-E models.",
+        "category": "media",
+        "icon": "🎨",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Detailed image description."},
+                "size": {"type": "string", "description": "Image size (e.g. 1024x1024). Default 1024x1024."},
+                "save_path": {"type": "string", "description": "Save path in workspace. Default: auto."},
+            },
+            "required": ["prompt"],
+        },
+        "config": {
+            "model": "dall-e-3",
+            "api_key": "",
+            "base_url": "",
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "model",
+                    "label": "Model",
+                    "type": "text",
+                    "default": "dall-e-3",
+                    "placeholder": "e.g. dall-e-3 or dall-e-2",
+                },
+                {
+                    "key": "api_key",
+                    "label": "API Key",
+                    "type": "password",
+                    "default": "",
+                    "placeholder": "OpenAI API Key",
+                },
+                {
+                    "key": "base_url",
+                    "label": "Base URL (optional)",
+                    "type": "text",
+                    "default": "",
+                    "placeholder": "Default: https://api.openai.com/v1",
+                },
+            ]
+        },
+    },
+    {
+        "name": "generate_image_google",
+        "display_name": "Generate Image (Google/Vertex)",
+        "description": "Generate an image via Google Gemini Image (Nano Banana) or Vertex AI.",
+        "category": "media",
+        "icon": "🎨",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Detailed image description."},
+                "size": {"type": "string", "description": "Image size (e.g. 1024x1024). Default 1024x1024."},
+                "save_path": {"type": "string", "description": "Save path in workspace. Default: auto."},
+            },
+            "required": ["prompt"],
+        },
+        "config": {
+            "model": "gemini-2.5-flash-image",
+            "api_key": "",
+            "base_url": "",
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "model",
+                    "label": "Model",
+                    "type": "text",
+                    "default": "gemini-2.5-flash-image",
+                    "placeholder": "e.g. gemini-2.5-flash-image",
+                },
+                {
+                    "key": "api_key",
+                    "label": "API Key",
+                    "type": "password",
+                    "default": "",
+                    "placeholder": "Google AI Studio or Vertex API Key",
+                },
+                {
+                    "key": "base_url",
+                    "label": "Base URL (optional)",
+                    "type": "text",
+                    "default": "",
+                    "placeholder": "Can be Vertex API URL: https://aiplatform.googleapis.com/...",
                 },
             ]
         },
@@ -785,6 +957,137 @@ BUILTIN_TOOLS = [
         "config_schema": {},
     },
     {
+        "name": "bitable_create_app",
+        "display_name": "Bitable Create",
+        "description": "在飞书云盘中新建一个多维表格（Bitable）应用。创建后返回可直接访问的链接和 App Token，下一步可以通过 bitable_list_tables 查看初始数据表。",
+        "category": "feishu",
+        "icon": "📊",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "新多维表格的名称，例如「项目追踪表」"},
+                "folder_token": {"type": "string", "description": "可选：父文件夹的 folder_token。不填则创建到「我的空间」根目录。"},
+            },
+            "required": ["name"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_list_tables",
+        "display_name": "Bitable List Tables",
+        "description": "列出飞书多维表格内的所有数据表 (Tables)。url 支持表格链接或 Wiki 链接。使用此工具了解请求的多维表格中有哪些表。",
+        "category": "feishu",
+        "icon": "📊",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+            },
+            "required": ["url"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_list_fields",
+        "display_name": "Bitable List Fields",
+        "description": "列出飞书多维表格指定数据表中的所有字段 (Fields)。url 支持表格链接或 Wiki 链接。在查询或修改数据前，必须先调用此工具了解字段名称和类型。",
+        "category": "feishu",
+        "icon": "⌨️",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+                "table_id": {"type": "string", "description": "具体的数据表 ID，如果 url 中包含 tbl 则可以不填。"},
+            },
+            "required": ["url"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_query_records",
+        "display_name": "Bitable Query Records",
+        "description": "查询飞书多维表格中的数据行。可以提供过滤条件 (filter)。",
+        "category": "feishu",
+        "icon": "🔍",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+                "table_id": {"type": "string", "description": "具体的数据表 ID，如果 url 中包含 tbl 则可以不填。"},
+                "filter_info": {"type": "string", "description": "可选，FQL 语法的过滤条件，例如 'CurrentValue.[Status]=\"Done\"'。如不确定过滤语法，可以不填，由你臺己在本地过滤返回的所有数据。"},
+                "max_results": {"type": "integer", "description": "最大返回条数 (默认 100)"},
+            },
+            "required": ["url"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_create_record",
+        "display_name": "Bitable Create Record",
+        "description": "在飞书多维表格中新增一行数据。fields 参数是一个字典，key 是字段名 (需要先通过 bitable_list_fields 获取)，value 是对应的值。",
+        "category": "feishu",
+        "icon": "➕",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+                "table_id": {"type": "string", "description": "具体的数据表 ID，如果 url 中包含 tbl 则可以不填。"},
+                "fields": {"type": "string", "description": "一个 JSON 字符串，代表要插入的 fields。例如：'{\"Name\": \"张三\", \"Age\": 30}'"},
+            },
+            "required": ["url", "fields"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_update_record",
+        "display_name": "Bitable Update Record",
+        "description": "更新飞书多维表格中的指定行数据。",
+        "category": "feishu",
+        "icon": "✏️",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+                "table_id": {"type": "string", "description": "具体的数据表 ID，如果 url 中包含 tbl 则可以不填。"},
+                "record_id": {"type": "string", "description": "要更新的 record_id，通过 bitable_query_records 获取。"},
+                "fields": {"type": "string", "description": "一个 JSON 字符串，代表要更新的 fields。例如：'{\"Status\": \"Done\"}'"},
+            },
+            "required": ["url", "record_id", "fields"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "bitable_delete_record",
+        "display_name": "Bitable Delete Record",
+        "description": "删除飞书多维表格中的指定行数据。",
+        "category": "feishu",
+        "icon": "🗑️",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "多维表格的 URL 链接。"},
+                "table_id": {"type": "string", "description": "具体的数据表 ID，如果 url 中包含 tbl 则可以不填。"},
+                "record_id": {"type": "string", "description": "要删除的 record_id，通过 bitable_query_records 获取。"},
+            },
+            "required": ["url", "record_id"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
         "name": "feishu_doc_read",
         "display_name": "Feishu Doc Read",
         "description": "Read the text content of a Feishu document (Docx). Provide the document token from its URL.",
@@ -834,6 +1137,46 @@ BUILTIN_TOOLS = [
                 "content": {"type": "string", "description": "Text content to append"},
             },
             "required": ["document_token", "content"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "feishu_drive_share",
+        "display_name": "Feishu Drive Share",
+        "description": "Manage collaborators for any Feishu Drive file (docx, bitable, sheet, etc.). Add, remove, or list collaborators with view/edit/full_access permissions.",
+        "category": "feishu",
+        "icon": "🔗",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "document_token": {"type": "string", "description": "File token (from URL or previous tool output)"},
+                "doc_type": {"type": "string", "enum": ["docx", "bitable", "sheet", "doc", "folder", "mindnote", "slides"], "description": "File type. Default: 'docx'"},
+                "action": {"type": "string", "enum": ["add", "remove", "list"], "description": "'add' to grant, 'remove' to revoke, 'list' to view"},
+                "member_names": {"type": "array", "items": {"type": "string"}, "description": "Colleague names to add/remove (auto-searched)"},
+                "member_open_ids": {"type": "array", "items": {"type": "string"}, "description": "Feishu open_ids directly"},
+                "permission": {"type": "string", "enum": ["view", "edit", "full_access"], "description": "Permission level. Default: 'edit'"},
+            },
+            "required": ["document_token", "action"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "feishu_drive_delete",
+        "display_name": "Feishu Drive Delete",
+        "description": "Delete a file or folder from Feishu Drive. The file is moved to the recycle bin. Supports all file types: docx, bitable, sheet, folder, etc.",
+        "category": "feishu",
+        "icon": "🗑️",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "file_token": {"type": "string", "description": "Token of the file to delete"},
+                "file_type": {"type": "string", "enum": ["file", "docx", "bitable", "folder", "doc", "sheet", "mindnote", "shortcut", "slides"], "description": "Type of the file to delete"},
+            },
+            "required": ["file_token", "file_type"],
         },
         "config": {},
         "config_schema": {},
@@ -917,6 +1260,60 @@ BUILTIN_TOOLS = [
         "config": {},
         "config_schema": {},
     },
+    {
+        "name": "feishu_approval_create",
+        "display_name": "Feishu Approval Create",
+        "description": "发起一个飞书审批流实例。你需要知道审批定义的 approval_code 和表单对应字段的内容。",
+        "category": "feishu",
+        "icon": "📝",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "approval_code": {"type": "string", "description": "审批定义的唯一代码 (approval_code)"},
+                "user_id": {"type": "string", "description": "发起人的 open_id。可以通过 feishu_user_search 获取。"},
+                "form_data": {"type": "string", "description": "表单内容的 JSON 字符串，例如 '[{\"id\":\"widget1\",\"type\":\"input\",\"value\":\"这是内容\"}]'"},
+            },
+            "required": ["approval_code", "user_id", "form_data"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "feishu_approval_query",
+        "display_name": "Feishu Approval Query",
+        "description": "查询指定的飞书审批实例列表。可以支持按状态查询（PENDING, APPROVED, REJECTED, CANCELED, DELETED）。",
+        "category": "feishu",
+        "icon": "📋",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "approval_code": {"type": "string", "description": "审批定义的唯一代码 (approval_code)"},
+                "status": {"type": "string", "description": "可选过滤状态：PENDING, APPROVED, REJECTED, CANCELED, DELETED"},
+            },
+            "required": ["approval_code"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "feishu_approval_get",
+        "display_name": "Feishu Approval Get",
+        "description": "获取指定飞书审批实例的详细信息与当前审批状态。",
+        "category": "feishu",
+        "icon": "📊",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "instance_id": {"type": "string", "description": "审批实例的 instance_id"},
+            },
+            "required": ["instance_id"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
     # --- Pages: public HTML hosting ---
     {
         "name": "publish_page",
@@ -992,7 +1389,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_navigate",
         "display_name": "AgentBay: 浏览器访问",
-        "description": "使用 AgentBay 浏览器环境访问指定 URL，可获取页面内容或截图。需要先配置 AgentBay 通道。",
+        "description": "[ENV: Browser] Navigate to a URL in the AgentBay HEADLESS BROWSER environment. IMPORTANT: This browser runs in an ISOLATED environment — it does NOT share filesystem, processes, or downloads with the Cloud Desktop (computer_* tools) or Code Sandbox (code_execute/command_exec). Files downloaded here are NOT accessible from other environments. Tip: after navigating, use browser_observe to identify interactive elements, then use browser_type/browser_click to interact.",
         "category": "agentbay",
         "icon": "🌐",
         "is_default": False,
@@ -1015,20 +1412,42 @@ AGENTBAY_TOOLS = [
                     "default": "",
                     "placeholder": "从阿里云 AgentBay 控制台获取",
                 },
+                {
+                    "key": "os_type",
+                    "label": "Cloud Computer OS",
+                    "type": "select",
+                    "default": "windows",
+                    "options": [
+                        {"value": "linux", "label": "Linux"},
+                        {"value": "windows", "label": "Windows"},
+                    ],
+                    "description": "Operating system for AgentBay cloud desktop (computer tools only)",
+                },
             ],
         },
     },
     {
+        "name": "agentbay_browser_screenshot",
+        "display_name": "AgentBay: 浏览器截图",
+        "description": "[ENV: Browser] Take a screenshot of the current page in the headless browser. This browser is ISOLATED from the Cloud Desktop and Code Sandbox. Use this after clicking, typing, or submitting a form to verify the result — it preserves the current page state. Never call browser_navigate just to take a screenshot.",
+        "category": "agentbay",
+        "icon": "📸",
+        "is_default": False,
+        "parameters_schema": {"type": "object", "properties": {}},
+        "config": {},
+        "config_schema": {},
+    },
+    {
         "name": "agentbay_browser_click",
         "display_name": "AgentBay: 浏览器点击",
-        "description": "在 AgentBay 浏览器环境中点击指定元素。需要先使用浏览器访问工具打开页面。",
+        "description": "[ENV: Browser] Click an element in the headless browser (ISOLATED from Desktop and Code Sandbox). selector can be a CSS selector (e.g. #btn) or natural language description (e.g. 'the Send button').",
         "category": "agentbay",
         "icon": "🖱️",
         "is_default": False,
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "selector": {"type": "string", "description": "CSS 选择器，如 #button 或 .class"},
+                "selector": {"type": "string", "description": "CSS selector (e.g. #button) or natural language description of the element (e.g. 'the blue Submit button')"},
             },
             "required": ["selector"],
         },
@@ -1038,14 +1457,14 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_type",
         "display_name": "AgentBay: 浏览器输入",
-        "description": "在 AgentBay 浏览器环境的指定元素中输入文本。需要先使用浏览器访问工具打开页面。",
+        "description": "[ENV: Browser] Type text into an element in the headless browser (ISOLATED from Desktop and Code Sandbox). selector can be a CSS selector or natural language description (e.g. 'phone number input').",
         "category": "agentbay",
         "icon": "⌨️",
         "is_default": False,
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "selector": {"type": "string", "description": "输入框的 CSS 选择器"},
+                "selector": {"type": "string", "description": "CSS selector or natural language description of the input field (e.g. 'the phone number input' or 'input[type=tel]')"},
                 "text": {"type": "string", "description": "要输入的文本"},
             },
             "required": ["selector", "text"],
@@ -1056,7 +1475,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_code_execute",
         "display_name": "AgentBay: 代码执行",
-        "description": "在 AgentBay 代码空间中执行代码（Python、Bash、Node.js）。需要先配置 AgentBay 通道。",
+        "description": "[ENV: Code Sandbox] Execute code (Python, Bash, Node.js) in the AgentBay Code Sandbox. IMPORTANT: This sandbox is an ISOLATED environment — it does NOT share filesystem, processes, or network with the Headless Browser (browser_* tools) or Cloud Desktop (computer_* tools). Files created here are NOT accessible from other environments.",
         "category": "agentbay",
         "icon": "💻",
         "is_default": False,
@@ -1076,7 +1495,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_extract",
         "display_name": "AgentBay: Browser Extract",
-        "description": "Extract structured data from the current browser page using a natural language instruction. More efficient than taking a screenshot and parsing with vision.",
+        "description": "[ENV: Browser] Extract structured data from the current browser page using a natural language instruction. This browser is ISOLATED from the Cloud Desktop and Code Sandbox. More efficient than taking a screenshot and parsing with vision.",
         "category": "agentbay",
         "icon": "📊",
         "is_default": False,
@@ -1094,7 +1513,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_browser_observe",
         "display_name": "AgentBay: Browser Observe",
-        "description": "Observe the current browser page state and return a list of interactive elements. Helps the agent understand what can be clicked/interacted with on the page.",
+        "description": "[ENV: Browser] Observe the current browser page state and return a list of interactive elements. This browser is ISOLATED from the Cloud Desktop and Code Sandbox. Helps the agent understand what can be clicked/interacted with on the page.",
         "category": "agentbay",
         "icon": "👁️",
         "is_default": False,
@@ -1109,11 +1528,29 @@ AGENTBAY_TOOLS = [
         "config": {},
         "config_schema": {},
     },
+    {
+        "name": "agentbay_browser_login",
+        "display_name": "AgentBay: Browser Login",
+        "description": "[ENV: Browser] Use AgentBay's AI-driven login skill to automate complex login flows (CAPTCHAs, OTP, multi-step auth) in the headless browser. This browser is ISOLATED from the Cloud Desktop and Code Sandbox.",
+        "category": "agentbay",
+        "icon": "🔐",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The login page URL to navigate to"},
+                "login_config": {"type": "string", "description": "JSON string with login config"},
+            },
+            "required": ["url", "login_config"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
     # ── Command (Shell) ───────────────────────────────────────────────────
     {
         "name": "agentbay_command_exec",
         "display_name": "AgentBay: Shell Command",
-        "description": "Execute a shell command in the AgentBay cloud environment. Returns stdout, stderr, and exit code. Useful for system operations, package installation, and file manipulation.",
+        "description": "[ENV: Code Sandbox] Execute a shell command in the AgentBay Code Sandbox. IMPORTANT: This sandbox is ISOLATED from the Headless Browser (browser_* tools) and Cloud Desktop (computer_* tools). Files and processes are NOT shared between environments. Returns stdout, stderr, and exit code.",
         "category": "agentbay",
         "icon": "🖥️",
         "is_default": False,
@@ -1133,7 +1570,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_screenshot",
         "display_name": "AgentBay: Desktop Screenshot",
-        "description": "Take a screenshot of the AgentBay cloud desktop. Essential for understanding the current desktop state before performing GUI operations.",
+        "description": "[ENV: Cloud Desktop] Take a screenshot of the full Cloud Desktop (Windows/Linux). IMPORTANT: This desktop is an ISOLATED environment — it does NOT share filesystem, processes, or browser sessions with the Headless Browser (browser_* tools) or Code Sandbox (code_execute/command_exec). To browse the web on this desktop, use computer_start_app to open a browser app. Essential for understanding the current desktop state before performing GUI operations.",
         "category": "agentbay",
         "icon": "📸",
         "is_default": False,
@@ -1144,7 +1581,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_click",
         "display_name": "AgentBay: Mouse Click",
-        "description": "Click the mouse at specific screen coordinates on the AgentBay cloud desktop. Take a screenshot first to identify the target position.",
+        "description": "[ENV: Cloud Desktop] Click the mouse at specific screen coordinates on the Cloud Desktop (ISOLATED from Browser and Code Sandbox). Take a screenshot first to identify the target position.",
         "category": "agentbay",
         "icon": "🖱️",
         "is_default": False,
@@ -1163,7 +1600,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_input_text",
         "display_name": "AgentBay: Keyboard Input",
-        "description": "Type text at the current cursor position on the AgentBay cloud desktop. Click on the target input field first.",
+        "description": "[ENV: Cloud Desktop] Type text at the current cursor position on the Cloud Desktop (ISOLATED from Browser and Code Sandbox). Click on the target input field first.",
         "category": "agentbay",
         "icon": "⌨️",
         "is_default": False,
@@ -1180,7 +1617,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_press_keys",
         "display_name": "AgentBay: Keyboard Shortcut",
-        "description": "Press keyboard keys or shortcuts on the AgentBay cloud desktop. For example ['ctrl', 'c'] for copy, ['alt', 'tab'] for window switch, ['enter'] to confirm.",
+        "description": "[ENV: Cloud Desktop] Press keyboard keys or shortcuts on the Cloud Desktop (ISOLATED from Browser and Code Sandbox). For example ['ctrl', 'c'] for copy, ['alt', 'tab'] for window switch, ['enter'] to confirm.",
         "category": "agentbay",
         "icon": "⌨️",
         "is_default": False,
@@ -1198,7 +1635,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_scroll",
         "display_name": "AgentBay: Scroll",
-        "description": "Scroll the screen at a specific position on the AgentBay cloud desktop.",
+        "description": "[ENV: Cloud Desktop] Scroll the screen at a specific position on the Cloud Desktop (ISOLATED from Browser and Code Sandbox).",
         "category": "agentbay",
         "icon": "🔃",
         "is_default": False,
@@ -1218,7 +1655,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_move_mouse",
         "display_name": "AgentBay: Mouse Move",
-        "description": "Move the mouse to coordinates without clicking. Useful for triggering hover effects, tooltips, or dropdown menus.",
+        "description": "[ENV: Cloud Desktop] Move the mouse to coordinates on the Cloud Desktop without clicking. Useful for triggering hover effects, tooltips, or dropdown menus.",
         "category": "agentbay",
         "icon": "🖱️",
         "is_default": False,
@@ -1236,7 +1673,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_drag_mouse",
         "display_name": "AgentBay: Mouse Drag",
-        "description": "Drag the mouse from one position to another. Useful for selecting text, moving files, resizing windows.",
+        "description": "[ENV: Cloud Desktop] Drag the mouse from one position to another on the Cloud Desktop. Useful for selecting text, moving files, resizing windows.",
         "category": "agentbay",
         "icon": "🖱️",
         "is_default": False,
@@ -1257,7 +1694,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_get_screen_size",
         "display_name": "AgentBay: Get Screen Size",
-        "description": "Get the screen resolution of the AgentBay cloud desktop. Useful for calculating click coordinates.",
+        "description": "[ENV: Cloud Desktop] Get the screen resolution of the Cloud Desktop. Useful for calculating click coordinates.",
         "category": "agentbay",
         "icon": "📐",
         "is_default": False,
@@ -1268,7 +1705,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_start_app",
         "display_name": "AgentBay: Start Application",
-        "description": "Start an application on the AgentBay cloud desktop by its launch command (e.g. 'firefox', 'libreoffice --calc').",
+        "description": "[ENV: Cloud Desktop] Start an application on the Cloud Desktop by its launch command (e.g. 'firefox', 'libreoffice --calc'). The desktop is ISOLATED from the Headless Browser and Code Sandbox environments.",
         "category": "agentbay",
         "icon": "🚀",
         "is_default": False,
@@ -1286,7 +1723,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_get_cursor_position",
         "display_name": "AgentBay: Get Cursor Position",
-        "description": "Get the current mouse cursor position on the AgentBay cloud desktop.",
+        "description": "[ENV: Cloud Desktop] Get the current mouse cursor position on the Cloud Desktop.",
         "category": "agentbay",
         "icon": "📍",
         "is_default": False,
@@ -1297,7 +1734,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_get_active_window",
         "display_name": "AgentBay: Get Active Window",
-        "description": "Get information about the currently focused window, including window ID, title, and position.",
+        "description": "[ENV: Cloud Desktop] Get information about the currently focused window on the Cloud Desktop, including window ID, title, and position.",
         "category": "agentbay",
         "icon": "🪟",
         "is_default": False,
@@ -1308,7 +1745,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_activate_window",
         "display_name": "AgentBay: Activate Window",
-        "description": "Bring a specific window to the foreground by its window ID. Use get_active_window or list_visible_apps to find window IDs.",
+        "description": "[ENV: Cloud Desktop] Bring a specific window to the foreground on the Cloud Desktop by its window ID. Use get_active_window or list_visible_apps to find window IDs.",
         "category": "agentbay",
         "icon": "🪟",
         "is_default": False,
@@ -1325,7 +1762,7 @@ AGENTBAY_TOOLS = [
     {
         "name": "agentbay_computer_list_visible_apps",
         "display_name": "AgentBay: List Running Apps",
-        "description": "List all currently visible/running applications on the AgentBay cloud desktop with their process info and window IDs.",
+        "description": "[ENV: Cloud Desktop] List all currently visible/running applications on the Cloud Desktop with their process info and window IDs.",
         "category": "agentbay",
         "icon": "📋",
         "is_default": False,
@@ -1360,9 +1797,9 @@ async def seed_builtin_tools():
                     category=t["category"],
                     icon=t["icon"],
                     is_default=t["is_default"],
-                    parameters_schema=t["parameters_schema"],
                     config=t.get("config", {}),
                     config_schema=t.get("config_schema", {}),
+                    source="builtin",
                 )
                 db.add(tool)
                 await db.flush()  # get tool.id
@@ -1525,6 +1962,7 @@ async def seed_atlassian_rovo_config():
                 config_schema=t["config_schema"],
                 mcp_server_url=ATLASSIAN_ROVO_MCP_URL,
                 mcp_server_name="Atlassian Rovo",
+                source="admin",
             )
             db.add(tool)
             await db.commit()

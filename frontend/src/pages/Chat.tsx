@@ -3,7 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
 import MarkdownRenderer from '../components/MarkdownRenderer';
-import { agentApi, enterpriseApi } from '../services/api';
+import AgentBayLivePanel, { LivePreviewState } from '../components/AgentBayLivePanel';
+import { agentApi, enterpriseApi, uploadFileWithProgress } from '../services/api';
+import { IconPaperclip, IconSend } from '@tabler/icons-react';
+import { formatFileSize } from '../utils/formatFileSize';
 import { useAuthStore } from '../stores';
 
 /* ── Inline SVG Icons ── */
@@ -26,16 +29,6 @@ const Icons = {
         <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 3V3z" />
             <path d="M5 5.5h6M5 8h4" />
-        </svg>
-    ),
-    clip: (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13.5 7l-5.8 5.8a3 3 0 01-4.2-4.2L9.3 2.8a2 2 0 012.8 2.8L6.3 11.4a1 1 0 01-1.4-1.4L10.7 4.2" />
-        </svg>
-    ),
-    loader: (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M8 2v3M8 11v3M3.8 3.8l2.1 2.1M10.1 10.1l2.1 2.1M2 8h3M11 8h3M3.8 12.2l2.1-2.1M10.1 5.9l2.1-2.1" />
         </svg>
     ),
     tool: (
@@ -68,13 +61,23 @@ export default function Chat() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [connected, setConnected] = useState(false);
-    const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState<{
+        name: string;
+        percent: number;
+        previewUrl?: string;
+        sizeBytes: number;
+    } | null>(null);
     const [streaming, setStreaming] = useState(false);
     const [isWaiting, setIsWaiting] = useState(false);
     const [attachedFile, setAttachedFile] = useState<{ name: string; text: string; path?: string; imageUrl?: string } | null>(null);
+    const [liveState, setLiveState] = useState<LivePreviewState>({});
+    const [livePanelVisible, setLivePanelVisible] = useState(false);
+    const [wsSessionId, setWsSessionId] = useState<string>('');
     const wsRef = useRef<WebSocket | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // Ref to the chat textarea for direct DOM height manipulation
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
     const pendingToolCalls = useRef<ToolCall[]>([]);
     const streamContent = useRef('');
     const thinkingContent = useRef('');
@@ -170,6 +173,34 @@ export default function Chat() {
                     setStreaming(false);
                 }
 
+                // Capture session_id from the 'connected' message for Take Control
+                if (data.type === 'connected' && data.session_id) {
+                    setWsSessionId(data.session_id);
+                    return;
+                }
+
+                // ── AgentBay live preview events ──
+                if (data.type === 'agentbay_live') {
+                    console.log('[LivePreview] Received:', data.env, 'url:', data.screenshot_url?.substring(0, 60));
+                    setLiveState(prev => {
+                        const next = { ...prev };
+                        if ((data.env === 'desktop' || data.env === 'browser') && data.screenshot_url) {
+                            // Use URL-based approach: append cache-busting timestamp
+                            const imgUrl = data.screenshot_url + '&_t=' + Date.now();
+                            if (data.env === 'desktop') next.desktop = { screenshotUrl: imgUrl };
+                            else next.browser = { screenshotUrl: imgUrl };
+                        } else if (data.env === 'code' && data.output) {
+                            // Append code output
+                            const existing = prev.code?.output || '';
+                            next.code = { output: existing + (existing ? '\n---\n' : '') + data.output };
+                        }
+                        return next;
+                    });
+                    // Auto-expand the live panel on first data
+                    setLivePanelVisible(true);
+                    return;
+                }
+
                 if (data.type === 'thinking') {
                     // Accumulate thinking content
                     thinkingContent.current += data.content;
@@ -196,8 +227,29 @@ export default function Chat() {
                         return [...prev, { role: 'assistant', content: streamContent.current, timestamp: new Date().toISOString() }];
                     });
                 } else if (data.type === 'tool_call') {
+                    // Debug: log all tool_call events to verify frontend code is current
+                    console.log('[ToolCall]', data.name, data.status, 'keys:', Object.keys(data).join(','));
                     if (data.status === 'done') {
                         pendingToolCalls.current.push({ name: data.name, args: data.args, result: data.result });
+
+                        // ── AgentBay live preview (embedded in tool_call) ──
+                        if (data.live_preview) {
+                            const lp = data.live_preview;
+                            console.log('[LivePreview] Got from tool_call:', lp.env, lp.screenshot_url?.substring(0, 60));
+                            setLiveState(prev => {
+                                const next = { ...prev };
+                                if ((lp.env === 'desktop' || lp.env === 'browser') && lp.screenshot_url) {
+                                    const imgUrl = lp.screenshot_url + '&_t=' + Date.now();
+                                    if (lp.env === 'desktop') next.desktop = { screenshotUrl: imgUrl };
+                                    else next.browser = { screenshotUrl: imgUrl };
+                                } else if (lp.env === 'code' && lp.output) {
+                                    const existing = prev.code?.output || '';
+                                    next.code = { output: existing + (existing ? '\n---\n' : '') + lp.output };
+                                }
+                                return next;
+                            });
+                            setLivePanelVisible(true);
+                        }
                     }
                 } else if (data.type === 'done') {
                     // Final response — replace streaming message with final + tool calls
@@ -235,6 +287,13 @@ export default function Chat() {
         };
     }, [id, token]);
 
+    // Auto-focus input when connection is established
+    useEffect(() => {
+        if (connected) {
+            setTimeout(() => textareaRef.current?.focus(), 50);
+        }
+    }, [connected]);
+
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -243,30 +302,34 @@ export default function Chat() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        setUploading(true);
+        const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
+        setUploadProgress({ name: file.name, percent: 0, previewUrl, sizeBytes: file.size });
+
         try {
-            const formData = new FormData();
-            formData.append('file', file);
-            if (id) formData.append('agent_id', id);
-
-            const resp = await fetch('/api/chat/upload', {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-                body: formData,
+            const { promise } = uploadFileWithProgress(
+                '/chat/upload',
+                file,
+                (pct) => {
+                    setUploadProgress((prev) =>
+                        prev ? { ...prev, percent: pct >= 101 ? 100 : pct } : null,
+                    );
+                },
+                id ? { agent_id: id } : undefined,
+            );
+            const data = await promise;
+            setAttachedFile({
+                name: data.filename,
+                text: data.extracted_text,
+                path: data.workspace_path,
+                imageUrl: data.image_data_url || undefined,
             });
-
-            if (!resp.ok) {
-                const err = await resp.json();
-                alert(err.detail || t('agent.upload.failed'));
-                return;
+        } catch (err: any) {
+            if (err?.message !== 'Upload cancelled') {
+                alert(t('agent.upload.failed') + (err?.message ? `: ${err.message}` : ''));
             }
-
-            const data = await resp.json();
-            setAttachedFile({ name: data.filename, text: data.extracted_text, path: data.workspace_path, imageUrl: data.image_data_url || undefined });
-        } catch (err) {
-            alert(t('agent.upload.failed') + ': ' + (err as Error).message);
         } finally {
-            setUploading(false);
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            setUploadProgress(null);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
@@ -324,12 +387,19 @@ export default function Chat() {
         setAttachedFile(null);
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Enter sends the message; Shift+Enter inserts a newline
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isWaiting && !streaming) {
             e.preventDefault();
             sendMessage();
         }
     };
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInput(e.target.value);
+    };
+
+    const hasLiveData = !!(liveState.desktop || liveState.browser || liveState.code);
 
     return (
         <div>
@@ -348,7 +418,9 @@ export default function Chat() {
                 </div>
             </div>
 
-            <div className="chat-container">
+            <div className={`chat-container ${hasLiveData ? 'chat-with-live-panel' : ''}`}>
+                {/* Wrap chat area in a column so it coexists with the live panel in flex-row */}
+                <div className="chat-main">
                 <div className="chat-messages">
                     {messages.length === 0 && (
                         <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-tertiary)' }}>
@@ -385,7 +457,7 @@ export default function Chat() {
                                             color: 'rgba(147, 130, 220, 0.9)', fontWeight: 500,
                                             userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px',
                                         }}>
-                                            💭 Thinking
+                                            Thinking
                                         </summary>
                                         <div style={{
                                             padding: '4px 10px 8px',
@@ -478,66 +550,125 @@ export default function Chat() {
                     <div ref={messagesEndRef} />
                 </div>
 
-                {attachedFile && (
-                    <div style={{
-                        padding: '6px 12px',
-                        background: 'var(--bg-elevated)',
-                        borderTop: '1px solid var(--border-subtle)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        fontSize: '12px',
-                    }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            {attachedFile.imageUrl ? (
-                                <img src={attachedFile.imageUrl} alt={attachedFile.name} style={{ width: '32px', height: '32px', borderRadius: '4px', objectFit: 'cover' }} />
-                            ) : (
-                                <span style={{ display: 'flex' }}>{Icons.clip}</span>
-                            )}
-                            {attachedFile.name}
-                        </span>
-                        <button
-                            onClick={() => setAttachedFile(null)}
-                            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '14px' }}
-                        >✕</button>
-                    </div>
-                )}
-
                 <div className="chat-input-area">
-                    <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileSelect}
-                        style={{ display: 'none' }}
-
-                    />
-                    <button
-                        className="btn btn-secondary"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={!connected || uploading || isWaiting || streaming}
-                        style={{ padding: '8px 12px', fontSize: '16px', minWidth: 'auto' }}
-                        title={t('agent.workspace.uploadFile')}
-                    >
-                        {uploading ? Icons.loader : Icons.clip}
-                    </button>
-                    <input
-                        className="chat-input"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder={attachedFile ? t('agent.chat.askAboutFile', { name: attachedFile.name }) : t('chat.placeholder')}
-                        disabled={!connected}
-                    />
-                    {(streaming || isWaiting) ? (
-                        <button className="btn btn-stop-generation" onClick={() => { if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'abort' })); setStreaming(false); setIsWaiting(false); } }} title={t('chat.stop', 'Stop')}>
-                            <span className="stop-icon" />
-                        </button>
-                    ) : (
-                        <button className="btn btn-primary" onClick={sendMessage} disabled={!connected || (!input.trim() && !attachedFile)}>
-                            {t('chat.send')}
-                        </button>
-                    )}
+                    <div className="chat-composer">
+                        {(uploadProgress || (attachedFile && !uploadProgress)) && (
+                            <div className="chat-composer-attachments">
+                                {uploadProgress && (
+                                    <div className="chat-file-pill">
+                                        <div
+                                            className="chat-file-pill__fill"
+                                            style={{ width: `${uploadProgress.percent}%` }}
+                                        />
+                                        <div className="chat-file-pill__row">
+                                            {uploadProgress.previewUrl ? (
+                                                <img className="chat-file-pill__thumb" src={uploadProgress.previewUrl} alt="" />
+                                            ) : (
+                                                <span className="chat-file-pill__icon">
+                                                    <IconPaperclip size={14} stroke={1.75} />
+                                                </span>
+                                            )}
+                                            <span className="chat-file-pill__name">{uploadProgress.name}</span>
+                                            <span className="chat-file-pill__size">{formatFileSize(uploadProgress.sizeBytes)}</span>
+                                            <span className="chat-file-pill__pct">{uploadProgress.percent}%</span>
+                                        </div>
+                                    </div>
+                                )}
+                                {attachedFile && !uploadProgress && (
+                                    <div className="chat-file-pill">
+                                        <div className="chat-file-pill__row">
+                                            {attachedFile.imageUrl ? (
+                                                <img className="chat-file-pill__thumb" src={attachedFile.imageUrl} alt="" />
+                                            ) : (
+                                                <span className="chat-file-pill__icon">
+                                                    <IconPaperclip size={14} stroke={1.75} />
+                                                </span>
+                                            )}
+                                            <span className="chat-file-pill__name">{attachedFile.name}</span>
+                                            <button
+                                                type="button"
+                                                className="chat-file-pill__remove"
+                                                onClick={() => setAttachedFile(null)}
+                                                title={t('common.close', 'Close')}
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        <div className="chat-composer-input-block">
+                            <textarea
+                                ref={textareaRef}
+                                className="chat-input"
+                                value={input}
+                                onChange={handleInputChange}
+                                onKeyDown={handleKeyDown}
+                                placeholder={t('chat.placeholder')}
+                                disabled={!connected}
+                                rows={1}
+                            />
+                        </div>
+                        <div className="chat-composer-toolbar">
+                            <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display: 'none' }} />
+                            <button
+                                type="button"
+                                className="chat-composer-btn"
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={!connected || !!uploadProgress || isWaiting || streaming}
+                                title={t('agent.workspace.uploadFile')}
+                            >
+                                <IconPaperclip size={16} stroke={1.75} />
+                            </button>
+                            {(streaming || isWaiting) ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-stop-generation"
+                                    onClick={() => {
+                                        if (wsRef.current?.readyState === WebSocket.OPEN) {
+                                            wsRef.current.send(JSON.stringify({ type: 'abort' }));
+                                            setStreaming(false);
+                                            setIsWaiting(false);
+                                        }
+                                    }}
+                                    title={t('chat.stop', 'Stop')}
+                                >
+                                    <span className="stop-icon" />
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary chat-composer-send"
+                                    onClick={sendMessage}
+                                    disabled={!connected || (!input.trim() && !attachedFile)}
+                                    title={t('chat.send')}
+                                >
+                                    <IconSend size={16} stroke={1.75} />
+                                </button>
+                            )}
+                        </div>
+                    </div>
                 </div>
+                </div>
+
+                {/* AgentBay Live Preview Panel */}
+                {hasLiveData && (
+                    <AgentBayLivePanel
+                        liveState={liveState}
+                        visible={livePanelVisible}
+                        onToggle={() => setLivePanelVisible(v => !v)}
+                        agentId={id}
+                        sessionId={wsSessionId}
+                        onLiveUpdate={(env, screenshotDataUri) => {
+                            // Update live preview with the latest screenshot from Take Control
+                            setLiveState(prev => ({
+                                ...prev,
+                                [env]: { screenshotUrl: screenshotDataUri },
+                            }));
+                        }}
+                    />
+                )}
             </div>
         </div>
     );

@@ -1,12 +1,13 @@
 """Feishu (Lark) OAuth and API integration service."""
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.models.user import User
+from app.models.user import User, Identity
+from app.models.identity import IdentityProvider
 
 settings = get_settings()
 
@@ -25,15 +26,26 @@ class FeishuService:
         self._app_access_token: str | None = None
 
     async def get_app_access_token(self) -> str:
-        """Get or refresh the app-level access token."""
+        """Get or refresh the app-level access token. Deprecated: Use get_tenant_access_token instead."""
+        return await self.get_tenant_access_token(self.app_id, self.app_secret)
+        
+    async def get_tenant_access_token(self, app_id: str = None, app_secret: str = None) -> str:
+        """Get or refresh the app-level access token (tenant_access_token)."""
+        target_app_id = app_id or self.app_id
+        target_app_secret = app_secret or self.app_secret
+        
         async with httpx.AsyncClient() as client:
             resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": self.app_id,
-                "app_secret": self.app_secret,
+                "app_id": target_app_id,
+                "app_secret": target_app_secret,
             })
             data = resp.json()
-            self._app_access_token = data.get("app_access_token", "")
-            return self._app_access_token
+            
+            token = data.get("tenant_access_token") or data.get("app_access_token", "")
+            if not app_id: # only cache default app token
+                self._app_access_token = token
+                
+            return token
 
     async def exchange_code_for_user(self, code: str) -> dict:
         """Exchange OAuth authorization code for user info.
@@ -66,67 +78,140 @@ class FeishuService:
                 "avatar_url": info_data.get("avatar_url", ""),
             }
 
-    async def login_or_register(self, db: AsyncSession, feishu_user: dict) -> tuple[User, str]:
+    async def login_or_register(self, db: AsyncSession, feishu_user: dict, tenant_id: str | None = None) -> tuple[User, str]:
         """Login existing user or register new one via Feishu SSO.
 
+        Uses OrgMember as the identity anchor (synced from Feishu org directory).
         Returns (user, jwt_token)
         """
+        from app.models.org import OrgMember
+
         open_id = feishu_user["open_id"]
         user_id = feishu_user.get("user_id", "")
+        union_id = feishu_user.get("union_id")
+        fs_email = feishu_user.get("email", "")
+        fs_name = feishu_user.get("name", "")
+        fs_avatar = feishu_user.get("avatar_url", "")
 
-        # Prefer user_id (tenant-stable) for user lookup
+        # Resolve provider (needed for OrgMember.provider_id scoping)
+        provider_query = select(IdentityProvider).where(IdentityProvider.provider_type == "feishu")
+        provider_query = provider_query.where(IdentityProvider.tenant_id == tenant_id)
+        provider_result = await db.execute(provider_query)
+        provider = provider_result.scalars().first()
+        if not provider:
+            provider = IdentityProvider(
+                provider_type="feishu",
+                name="Feishu",
+                is_active=True,
+                config={"app_id": self.app_id, "app_secret": self.app_secret},
+                tenant_id=tenant_id,
+            )
+            db.add(provider)
+            await db.flush()
+
+        # 1. Look up OrgMember by open_id (primary) or external_id (user_id)
+        #    Also filter by tenant_id and provider_id for accuracy
+        member = None
+        if open_id:
+            member_r = await db.execute(
+                select(OrgMember).where(
+                    OrgMember.open_id == open_id,
+                    OrgMember.provider_id == provider.id,
+                    OrgMember.status == "active",
+                )
+            )
+            member = member_r.scalars().first()
+        if not member and user_id:
+            member_r = await db.execute(
+                select(OrgMember).where(
+                    OrgMember.external_id == user_id,
+                    OrgMember.provider_id == provider.id,
+                    OrgMember.status == "active",
+                )
+            )
+            member = member_r.scalars().first()
+
+        # 2. Resolve User from OrgMember
         user = None
-        if user_id:
-            result = await db.execute(select(User).where(User.feishu_user_id == user_id))
-            user = result.scalar_one_or_none()
-        if not user and open_id:
-            result = await db.execute(select(User).where(User.feishu_open_id == open_id))
-            user = result.scalar_one_or_none()
+        if member and member.user_id:
+            u_result = await db.execute(select(User).where(User.id == member.user_id))
+            user = u_result.scalars().first()
+
+        # 3. Fallback: find by email matching (exact match)
+        if not user and fs_email:
+            query = select(User).join(User.identity).where(Identity.email == fs_email)
+            if tenant_id:
+                query = query.where(User.tenant_id == tenant_id)
+            result = await db.execute(query)
+            user = result.scalars().first()
 
         if user:
-            # Existing user — update info
-            user.avatar_url = feishu_user.get("avatar_url") or user.avatar_url
-            # Always update IDs to latest values
-            if open_id:
-                user.feishu_open_id = open_id
+            # Existing user — sync latest profile from Feishu
+            if fs_avatar:
+                user.avatar_url = fs_avatar
+            if (not user.email or user.email.endswith("@feishu.local")) and fs_email:
+                user.email = fs_email
+            if fs_name:
+                user.display_name = fs_name
+            # Update identity fields (user_id only)
             if user_id:
+                user.external_id = user_id
                 user.feishu_user_id = user_id
-            token = create_access_token(str(user.id), user.role)
-            return user, token
+            # Link to OrgMember if not yet bound
+            if member and not member.user_id:
+                member.user_id = user.id
+        else:
+            # New user — create account
+            username = fs_email.split("@")[0] if fs_email else f"feishu_{open_id[:8]}"
+            email = fs_email or f"{username}@feishu.local"
 
-        # New user — create account
-        username = feishu_user.get("email", "").split("@")[0] or f"feishu_{open_id[:8]}"
-        email = feishu_user.get("email") or f"{username}@feishu.local"
+            # Ensure unique username within tenant
+            query = (
+                select(User)
+                .join(User.identity)
+                .where(Identity.username == username)
+            )
+            if tenant_id:
+                query = query.where(User.tenant_id == tenant_id)
+            
+            existing = await db.execute(query)
+            if existing.scalar_one_or_none():
+                import uuid
+                username = f"{username}_{uuid.uuid4().hex[:6]}"
 
-        # Ensure unique username
-        existing = await db.execute(select(User).where(User.username == username))
-        if existing.scalar_one_or_none():
-            username = f"{username}_{open_id[:6]}"
+            # Step 1: Find or create global Identity using unified registration service
+            from app.services.registration_service import registration_service
+            # No phone available in this specific Feishu login block, but it handles email/username matching
+            identity = await registration_service.find_or_create_identity(
+                db,
+                email=email,
+                phone=user_info.get("mobile"),
+                username=username,
+                password=open_id,
+            )
 
-        user = User(
-            username=username,
-            email=email,
-            password_hash=hash_password(open_id),  # placeholder password
-            display_name=feishu_user.get("name", username),
-            avatar_url=feishu_user.get("avatar_url"),
-            feishu_open_id=open_id,
-            feishu_union_id=feishu_user.get("union_id"),
-            feishu_user_id=feishu_user.get("user_id"),
-        )
-        db.add(user)
+            # Step 2: Create tenant-scoped User linked to Identity
+            user = User(
+                identity_id=identity.id,
+                display_name=fs_name or username,
+                avatar_url=fs_avatar or None,
+                registration_source="feishu",
+                tenant_id=tenant_id,
+                is_active=True,
+            )
+
+            db.add(user)
+            await db.flush()
+
+            # Link back to OrgMember if found
+            if member:
+                member.user_id = user.id
+
         await db.flush()
 
         token = create_access_token(str(user.id), user.role)
         return user, token
 
-    async def bind_feishu(self, db: AsyncSession, user: User, code: str) -> User:
-        """Bind Feishu account to existing user."""
-        feishu_user = await self.exchange_code_for_user(code)
-        user.feishu_open_id = feishu_user["open_id"]
-        user.feishu_union_id = feishu_user.get("union_id")
-        user.feishu_user_id = feishu_user.get("user_id")
-        await db.flush()
-        return user
 
     async def send_message(self, app_id: str, app_secret: str, receive_id: str,
                            msg_type: str, content: str, receive_id_type: str = "open_id") -> dict:
@@ -359,5 +444,202 @@ class FeishuService:
             )
             return resp.json()
 
+    # --- Bitable (多维表格) API ---
+
+    async def bitable_list_tables(self, app_id: str, app_secret: str, app_token: str) -> dict:
+        """List all tables in a Bitable app."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables",
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def bitable_list_fields(self, app_id: str, app_secret: str, app_token: str, table_id: str) -> dict:
+        """List all fields in a specific table."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def bitable_query_records(self, app_id: str, app_secret: str, app_token: str, table_id: str, filters: dict | None = None) -> dict:
+        """Query records in a specific table."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        body = {}
+        if filters:
+            body = filters
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def bitable_create_record(self, app_id: str, app_secret: str, app_token: str, table_id: str, fields: dict) -> dict:
+        """Create a new record in a specific table."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                json={"fields": fields},
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def bitable_update_record(self, app_id: str, app_secret: str, app_token: str, table_id: str, record_id: str, fields: dict) -> dict:
+        """Update an existing record in a specific table."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.put(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}",
+                json={"fields": fields},
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+            
+    async def bitable_delete_record(self, app_id: str, app_secret: str, app_token: str, table_id: str, record_id: str) -> dict:
+        """Delete an existing record in a specific table."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}",
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def bitable_create_app(self, app_id: str, app_secret: str, name: str, folder_token: str = "") -> dict:
+        """Create a new Bitable (多维表格) app.
+
+        Uses the Bitable v1 apps API: POST /open-apis/bitable/v1/apps
+        If folder_token is empty, the file is created in the root 'My Drive'.
+
+        Args:
+            name:         The display name of the new Bitable (max 255 chars).
+            folder_token: Parent folder token (optional). Leave empty for root.
+        Returns:
+            API response dict containing 'data.app.app_token' as the new app_token.
+        """
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        body: dict = {"name": name}
+        if folder_token:
+            body["folder_token"] = folder_token
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/bitable/v1/apps",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"},
+            )
+            return resp.json()
+
+
+    # --- Docs API ---
+    async def read_feishu_doc(self, app_id: str, app_secret: str, document_id: str) -> dict:
+        """Get pure text content of a new-version Feishu Doc (docx)."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/raw_content",
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def create_feishu_doc(self, app_id: str, app_secret: str, folder_token: str | None = None, title: str = "Untitled Document") -> dict:
+        """Create a new Feishu Doc (docx)."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        body = {"title": title}
+        if folder_token:
+            body["folder_token"] = folder_token
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/docx/v1/documents",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def append_feishu_doc(self, app_id: str, app_secret: str, document_id: str, content: str) -> dict:
+        """Append text to the end of a Feishu Doc (document_id is also the root block_id)."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        # Convert plain text to a text block
+        body = {
+            "children": [
+                {
+                    "block_type": 2, # Text block (paragraph)
+                    "text": {
+                        "elements": [
+                            {
+                                "text_run": {
+                                    "content": content
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def append_feishu_doc_blocks(self, app_id: str, app_secret: str, document_id: str, block_id: str, blocks: list) -> dict:
+        """Append pre-parsed Markdown blocks to a Feishu doc block (e.g., body_block_id)."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}/children",
+                json={"children": blocks},
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    # --- Approval API ---
+    async def create_approval_instance(self, app_id: str, app_secret: str, approval_code: str, user_id: str, form_data: str) -> dict:
+        """Create a Feishu approval instance."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        body = {
+            "approval_code": approval_code,
+            "user_id": user_id,
+            "form": form_data
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/approval/v4/instances",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def query_approval_instances(self, app_id: str, app_secret: str, approval_code: str, status: str = None) -> dict:
+        """Query Feishu approval instances."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        body = {"approval_code": approval_code}
+        if status:
+            body["status"] = status
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/approval/v4/instances/query",
+                json=body,
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
+
+    async def get_approval_instance(self, app_id: str, app_secret: str, instance_id: str) -> dict:
+        """Get details of a specific Feishu approval instance."""
+        tenant_token = await self.get_tenant_access_token(app_id, app_secret)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://open.feishu.cn/open-apis/approval/v4/instances/{instance_id}",
+                headers={"Authorization": f"Bearer {tenant_token}"}
+            )
+            return resp.json()
 
 feishu_service = FeishuService()

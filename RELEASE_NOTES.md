@@ -1,95 +1,55 @@
-# v1.7.2
+# v1.8.0-beta.3
 
-## Highlights
+## What's Changed
 
-- **Discord Gateway (WebSocket)** — Connect Discord bots without a public IP. Configure via Channel Settings.
-- **Clawith Pages** — Agents can publish static HTML pages with shareable `/p/{short_id}` URLs.
-- **Unified Notification System** — Plaza replies, @mentions, broadcasts, and heartbeat-drain notifications with category filtering.
-- **Baidu (Qianfan) LLM Provider** — Add Baidu models alongside OpenAI, Anthropic, and others.
-- **LLM Temperature Control** — Set per-model temperature from the LLM management page.
-- **OpenClaw Settings Page** — Dedicated API key management for OpenClaw integrations.
-- **Platform Settings Restructure** — Companies page reorganized into a tabbed Platform Settings layout.
-- **Runtime Version Display** — `/api/version` endpoint and sidebar footer showing the running version.
+### New Features
 
-## Bug Fixes
+- **Split Code Executor into Local and E2B Cloud tools** — The single "Code Executor" tool has been separated into two independent tools. The local tool shows CPU/memory/network config; the E2B Cloud tool only requires an API key. E2B errors are now surfaced explicitly instead of silently falling back to local execution.
+- **MCP Server credential management** — New "Edit Server" UI and `PUT /tools/mcp-server` API endpoint for bulk-updating MCP server URLs and API keys across all tools sharing the same server.
+- **Feishu Wiki document creation** — `feishu_doc_create` now supports creating documents directly inside Wiki knowledge bases, with automatic detection of Wiki node tokens.
+- **Feishu permission JSON UI redesign** — Two-tier segmented control (Basic / Full) with i18n support for Feishu app permission configuration.
+- **Live Preview auto-sizing** — AgentBay Live Preview panel now auto-sizes to 50% of the chat container width.
 
-- Fix Alembic migration cycle error during backend startup (resolved `multi_tenant_registration` loop)
-- Fix missing relationship type dropdown when adding an Agent Relationship
-- Align Agent-to-Agent relationship types with Human-to-Agent ones and complete missing i18n translations
-- Fix missing database migration for `max_output_tokens` in `llm_models` table
-- Fix default company heartbeat floor not being applied to newly created agents
-- Fix heartbeat/scheduler tool calls failing with empty arguments (empty-args guard ported from chat flow)
-- Fix agent-to-agent session duplication and LLM tool confusion
-- Harden A2A communication security with tenant isolation and relationship checks
-- Fix A2A LLM timeout retries with jitter and error surfacing
-- Fix system message always placed first for cross-model compatibility
-- Fix streaming state not reset when switching sessions
-- Fix trigger resurrection on restart
-- Fix non-standard API streaming with JSON buffer
-- Fix plaza tenant scoping and @mention navigation
-- Fix OpenClaw agent replies not appearing in chat UI
-- Fix chat message alignment by participant
-- Improve broadcast UI and @mention dropdown (scrollable, increased limit)
+### Bug Fixes
 
-## Database Migrations
+- **Plaintext SMTP relay support** — STARTTLS is now auto-negotiated based on server ESMTP capabilities instead of being forced on port 25/587. AUTH is skipped for unauthenticated IP-whitelisted internal relays. Password is no longer a required field in email configuration.
+- **Unified context window size** — Introduced `DEFAULT_CONTEXT_WINDOW_SIZE = 100` constant and unified all 9 communication channels (WebSocket, Feishu, Discord, WeCom, DingTalk, Teams, Slack) to use consistent fallback values.
+- **LLM stream retry** — Added `httpx.RemoteProtocolError` to the stream retry logic to handle upstream connection resets.
+- **Tool config double-encryption** — Fixed a bug where already-encrypted sensitive config fields were encrypted again on save.
+- **Loguru format collision** — Replaced `logger.error(..., exc_info=True)` with `logger.exception(...)` across all channel handlers to prevent crashes when error messages contain special characters.
+- **WeCom message handler** — Fixed `NameError` (`agent` vs `agent_obj`) and migrated user creation to `channel_user_service` to avoid AssociationProxy errors.
+- **Duplicate tool definition** — Removed `send_channel_message` from `_ALWAYS_INCLUDE_CORE` to prevent "Tool names must be unique" LLM errors.
+- **AgentBay connection test** — Fixed test image name (`linux_latest`) and `api_key` lookup in global tool config fallback.
+- **FastAPI route ordering** — Reordered `/tools/mcp-server/bulk` before `/tools/{tool_id}` to prevent 422 validation errors on older FastAPI versions.
+- **Other fixes** — LLM model temperature persistence, org_admin access to GitHub/ClawHub tokens, MCP tool import tenant scoping.
 
-Four new Alembic migrations run automatically on startup:
+### UI / i18n
 
-1. `add_published_pages` — Creates `published_pages` table
-2. `add_notification_agent_id` — Adds `agent_id`, `sender_name` columns to `notifications`; makes `user_id` nullable
-3. `add_llm_temperature` — Adds `temperature` column to `llm_models`
-4. `add_llm_max_output_tokens` — Adds `max_output_tokens` column to `llm_models`
+- **Context Window Size terminology** — Corrected misleading "Max Rounds" / "Context Rounds" labels to industry-standard "Context Window Size" with accurate descriptions.
+- **MCP Server group header** — Displays hostname instead of full URL for cleaner display.
 
-All migrations are idempotent (safe to re-run).
+## Upgrade Notes
 
-## New Dependency
+This is a **drop-in upgrade** from v1.8.0-beta.2. No breaking changes.
 
-- `discord.py>=2.3.0` — Required for Discord Gateway mode
+- **No database migrations required**
+- **No new dependencies**
+- **No environment variable changes**
+- The new `execute_code_e2b` tool will be automatically created by the tool seeder on startup. It is **not** a default tool — agents will not have it unless explicitly added.
+- The existing `execute_code` tool's config schema will be auto-synced (the sandbox type dropdown is removed since it's now always "subprocess").
 
-## Infrastructure
-
-- All Docker services now have `restart: unless-stopped`
-- `.dockerignore` updated to exclude `agent_data/` from build context
-- `entrypoint.sh` removed legacy schedule-to-triggers migration (completed in v1.7.0)
-- `restart.sh` supports external `DATABASE_URL`
-
-## Upgrade Instructions
-
-> **Important**: Users must upgrade one version at a time (e.g., v1.6.0 → v1.7.0 → v1.7.1 → v1.7.2). Skipping versions is not supported.
-
-### Option A: Docker Deployment
-
+### Docker Deployment
 ```bash
-cd /path/to/Clawith
 git pull origin main
-docker compose down
-docker compose up -d --build
+docker compose down && docker compose up -d --build
 ```
 
-Migrations run automatically via `entrypoint.sh`.
-
-> [!IMPORTANT]
-> **`--build` is required for this release.** The following features depend on changes baked into the Docker image (Nginx config, Python dependencies) and will NOT work with hot-update (`docker cp`) alone:
-> - **Clawith Pages** — requires the new `/p/` Nginx proxy rule
-> - **Discord Gateway** — requires the new `discord.py` dependency
->
-> If you previously upgraded via `docker cp` without `--build`, run `docker compose down && docker compose up -d --build` to apply these changes.
-
-### Option B: Source Deployment
-
+### Source Deployment
 ```bash
-cd /path/to/Clawith
 git pull origin main
-
-# Install dependencies (run from the backend/ directory)
-cd backend
-pip install .
-
-# Run migrations (must be run from backend/ directory where alembic.ini is located)
-alembic upgrade head
-
-# Restart backend
-# (your restart method here)
+# Backend
+pip install -r backend/requirements.txt  # no changes expected, but safe to run
+# Frontend (pre-built dist.zip is included)
+cd frontend && unzip -o dist.zip -d dist/
+# Restart services
 ```
-
-No `.env` changes required.

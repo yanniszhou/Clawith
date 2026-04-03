@@ -26,17 +26,23 @@ class LLMMessage:
     """Unified message format."""
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str | None = None
+    content: str | list | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
+    dynamic_content: str | None = None
 
     def to_openai_format(self) -> dict:
         """Convert to OpenAI format."""
         msg: dict[str, Any] = {"role": self.role}
-        if self.content is not None:
-            msg["content"] = self.content
+        
+        content = self.content
+        if self.role == "system" and self.dynamic_content:
+            content = f"{content}\n\n{self.dynamic_content}"
+            
+        if content is not None:
+            msg["content"] = content
         if self.tool_calls:
             msg["tool_calls"] = self.tool_calls
         if self.tool_call_id:
@@ -54,13 +60,39 @@ class LLMMessage:
         
         # Tool response (from user to assistant)
         if role == "tool":
+            # Build tool_result content: support both string and vision array formats
+            if isinstance(self.content, list):
+                # Vision content array: extract text parts and image parts
+                # Anthropic tool_result content supports [{type: "text", text: ...}, {type: "image", source: ...}]
+                tool_content_blocks = []
+                for part in self.content:
+                    if part.get("type") == "text":
+                        tool_content_blocks.append({"type": "text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        # Convert OpenAI image_url format to Anthropic image source format
+                        img_url = part.get("image_url", {}).get("url", "")
+                        if img_url.startswith("data:image/"):
+                            # Parse data URL: data:image/jpeg;base64,xxxxx
+                            header, b64_data = img_url.split(",", 1)
+                            media_type = header.split(":")[1].split(";")[0]  # e.g. image/jpeg
+                            tool_content_blocks.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": b64_data,
+                                }
+                            })
+                result_content = tool_content_blocks if tool_content_blocks else (self.content or "")
+            else:
+                result_content = self.content or ""
             return {
                 "role": "user",
                 "content": [
                     {
                         "type": "tool_result",
                         "tool_use_id": self.tool_call_id,
-                        "content": self.content or ""
+                        "content": result_content,
                     }
                 ]
             }
@@ -509,10 +541,15 @@ class OpenAICompatibleClient(LLMClient):
 
                 break  # Success
 
-            except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
+            except (httpx.TransportError, httpx.ConnectTimeout) as e:
+                # TransportError covers all network-layer issues:
+                # - ConnectError, ReadError, WriteError (NetworkError subclasses)
+                # - RemoteProtocolError, LocalProtocolError (ProtocolError subclasses)
+                # The last case is common with local vLLM when the server closes
+                # the connection mid-stream (e.g. OOM, context limit exceeded).
                 if attempt < max_retries - 1:
                     wait = (attempt + 1) * 1
-                    logger.warning(f"Stream attempt {attempt + 1} failed ({type(e).__name__}), retrying in {wait}s...")
+                    logger.warning(f"Stream attempt {attempt + 1} failed ({type(e).__name__}: {e}), retrying in {wait}s...")
                     await asyncio.sleep(wait)
                     full_content = ""
                     full_reasoning = ""
@@ -521,7 +558,7 @@ class OpenAICompatibleClient(LLMClient):
                     tag_buffer = ""
                     json_buffer = ""
                 else:
-                    raise LLMError(f"Connection failed after {max_retries} attempts: {e}")
+                    raise LLMError(f"Connection failed after {max_retries} attempts: {type(e).__name__}: {e}")
 
         # Clean up any remaining think tags
         full_content = re.sub(r"<think>[\s\S]*?</think>\s*", "", full_content).strip()
@@ -1300,8 +1337,10 @@ class GeminiClient(LLMClient):
                                 },
                             })
 
-        except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
-            raise LLMError(f"Connection failed: {e}")
+        except (httpx.TransportError, httpx.ConnectTimeout) as e:
+            # TransportError covers NetworkError (ConnectError, ReadError) and
+            # ProtocolError (RemoteProtocolError) — all common with local vLLM.
+            raise LLMError(f"Connection failed: {type(e).__name__}: {e}")
 
         return LLMResponse(
             content=full_text,
@@ -1353,7 +1392,19 @@ class AnthropicClient(LLMClient):
             "Content-Type": "application/json",
             "x-api-key": self.api_key,
             "anthropic-version": self.API_VERSION,
+            "anthropic-beta": "prompt-caching-2024-07-31",
         }
+
+    def _normalize_base_url(self) -> str:
+        """Normalize base URL by stripping trailing API paths."""
+        url = self.base_url.rstrip("/")
+        if url.endswith("/v1/messages"):
+            url = url[: -len("/v1/messages")]
+        elif url.endswith("/v1/chat/completions"):
+            url = url[: -len("/v1/chat/completions")]
+        elif url.endswith("/v1"):
+            url = url[: -len("/v1")]
+        return url
 
     def _build_payload(
         self,
@@ -1365,16 +1416,42 @@ class AnthropicClient(LLMClient):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Build Anthropic request payload."""
-        system_content = None
+        system_blocks = []
         anthropic_messages = []
 
         for msg in messages:
             if msg.role == "system":
-                system_content = msg.content
+                if msg.content:
+                    system_blocks.append({
+                        "type": "text",
+                        "text": msg.content,
+                        "cache_control": {"type": "ephemeral"}
+                    })
+                if msg.dynamic_content:
+                    system_blocks.append({
+                        "type": "text",
+                        "text": f"\n{msg.dynamic_content}"
+                    })
             else:
                 formatted = msg.to_anthropic_format()
                 if formatted:
                     anthropic_messages.append(formatted)
+
+        # In Anthropic prompt caching, we also want to cache_control the last user message
+        # So we add cache_control to the very last message in the history if it's a user message
+        if anthropic_messages and anthropic_messages[-1]["role"] == "user":
+            user_msg = anthropic_messages[-1]
+            if isinstance(user_msg["content"], list) and user_msg["content"]:
+                # Ensure the last block of the user message has cache_control
+                user_msg["content"][-1]["cache_control"] = {"type": "ephemeral"}
+            elif isinstance(user_msg["content"], str):
+                user_msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": user_msg["content"],
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -1385,8 +1462,8 @@ class AnthropicClient(LLMClient):
         if temperature is not None:
             payload["temperature"] = temperature
 
-        if system_content:
-            payload["system"] = system_content
+        if system_blocks:
+            payload["system"] = system_blocks
 
         # Handle Extended Thinking
         thinking = kwargs.pop("thinking", None)
@@ -1407,6 +1484,8 @@ class AnthropicClient(LLMClient):
                         "description": func.get("description", ""),
                         "input_schema": func.get("parameters", {"type": "object"}),
                     })
+            if anthropic_tools:
+                anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
             payload["tools"] = anthropic_tools
 
         payload.update(kwargs)
@@ -1421,7 +1500,7 @@ class AnthropicClient(LLMClient):
         **kwargs: Any,
     ) -> LLMResponse:
         """Non-streaming completion."""
-        url = f"{self.base_url.rstrip('/')}/v1/messages"
+        url = f"{self._normalize_base_url()}/v1/messages"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 
         client = await self._get_client()
@@ -1484,7 +1563,7 @@ class AnthropicClient(LLMClient):
         **kwargs: Any,
     ) -> LLMResponse:
         """Streaming completion."""
-        url = f"{self.base_url.rstrip('/')}/v1/messages"
+        url = f"{self._normalize_base_url()}/v1/messages"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=True, **kwargs)
 
         full_content = ""
@@ -1587,8 +1666,10 @@ class AnthropicClient(LLMClient):
                     elif current_event == "message_stop":
                         break
 
-        except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
-            raise LLMError(f"Connection failed: {e}")
+        except (httpx.TransportError, httpx.ConnectTimeout) as e:
+            # TransportError covers NetworkError (ConnectError, ReadError) and
+            # ProtocolError (RemoteProtocolError) — all common with local vLLM.
+            raise LLMError(f"Connection failed: {type(e).__name__}: {e}")
 
         # Normalize stop reason to OpenAI style (optional but helpful for consistency)
         if last_finish_reason == "end_turn":

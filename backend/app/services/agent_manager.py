@@ -74,10 +74,39 @@ class AgentManager:
             soul_content = soul_content.replace("{{creator_name}}", creator_name)
             soul_content = soul_content.replace("{{created_at}}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
-        if personality:
-            soul_content += f"\n\n## Personality\n{personality}\n"
-        if boundaries:
-            soul_content += f"\n## Boundaries\n{boundaries}\n"
+        # Helper function to replace or append sections
+        def replace_or_append_section(content: str, section_name: str, section_content: str) -> str:
+            """Replace existing ## SectionName or append if not found."""
+            if not section_content:
+                return content
+            
+            # Pattern to match existing section (case-insensitive header)
+            import re
+            pattern = rf"^##\s+{re.escape(section_name)}\s*$"
+            lines = content.split('\n')
+            
+            # Find the section header
+            for i, line in enumerate(lines):
+                if re.match(pattern, line.strip(), re.IGNORECASE):
+                    # Found existing section - replace until next ## header or end
+                    section_start = i
+                    section_end = len(lines)
+                    for j in range(i + 1, len(lines)):
+                        if lines[j].strip().startswith('## '):
+                            section_end = j
+                            break
+                    
+                    # Replace the section content (with trailing newline for proper spacing)
+                    new_section = f"## {section_name}\n{section_content}\n"
+                    lines = lines[:section_start] + [new_section] + lines[section_end:]
+                    return '\n'.join(lines)
+            
+            # Section not found - append at the end
+            return content + f"\n## {section_name}\n{section_content}\n"
+
+        # Use the helper to replace or append Personality and Boundaries
+        soul_content = replace_or_append_section(soul_content, "Personality", personality)
+        soul_content = replace_or_append_section(soul_content, "Boundaries", boundaries)
 
         soul_path.write_text(soul_content, encoding="utf-8")
 

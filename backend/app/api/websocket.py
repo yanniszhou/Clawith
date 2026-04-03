@@ -3,15 +3,15 @@
 import json
 import uuid
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, get_current_user
 from app.core.permissions import check_agent_access, is_agent_expired
-from app.database import async_session
+from app.database import async_session, get_db
 from app.models.agent import Agent
 from app.models.audit import ChatMessage
 from app.models.llm import LLMModel
@@ -42,7 +42,20 @@ class ConnectionManager:
     async def send_message(self, agent_id: str, message: dict):
         if agent_id in self.active_connections:
             for ws, _sid in self.active_connections[agent_id]:
-                await ws.send_json(message)
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    pass
+
+    async def send_to_session(self, agent_id: str, session_id: str, message: dict):
+        """Send message only to WebSocket connections matching the given session_id."""
+        if agent_id in self.active_connections:
+            for ws, sid in self.active_connections[agent_id]:
+                if sid == session_id:
+                    try:
+                        await ws.send_json(message)
+                    except Exception:
+                        pass
 
     def get_active_session_ids(self, agent_id: str) -> list[str]:
         """Return distinct session IDs for all active WS connections of an agent."""
@@ -52,12 +65,6 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-
-from fastapi import Depends
-from app.core.security import get_current_user
-from app.database import get_db
-from app.models.user import User
 
 
 @router.get("/api/chat/{agent_id}/history")
@@ -103,6 +110,7 @@ async def call_llm(
     role_description: str,
     agent_id=None,
     user_id=None,
+    session_id: str = "",
     on_chunk=None,
     on_tool_call=None,
     on_thinking=None,
@@ -149,7 +157,7 @@ async def call_llm(
                     _current_user_name = _u.display_name or _u.username
         except Exception:
             pass
-    system_prompt = await build_agent_context(agent_id, agent_name, role_description, current_user_name=_current_user_name)
+    static_prompt, dynamic_prompt = await build_agent_context(agent_id, agent_name, role_description, current_user_name=_current_user_name)
 
     # Load tools dynamically from DB
     tools_for_llm = await get_agent_tools_for_llm(agent_id) if agent_id else AGENT_TOOLS
@@ -161,7 +169,7 @@ async def call_llm(
             v = v.value
         return (v if isinstance(v, str) else str(v)).strip().lower().replace("-", "_")
 
-    api_messages = [LLMMessage(role="system", content=system_prompt)]
+    api_messages = [LLMMessage(role="system", content=static_prompt, dynamic_content=dynamic_prompt)]
     for msg in messages:
         r = _normalized_role(msg)
         if r in ("tool_call", "toolcall"):
@@ -224,7 +232,7 @@ async def call_llm(
             api_key=model.api_key_encrypted,
             model=model.model,
             base_url=model.base_url,
-            timeout=120.0,
+            timeout=float(getattr(model, 'request_timeout', None) or 120.0),
         )
     except Exception as e:
         return f"[Error] Failed to create LLM client: {e}"
@@ -361,6 +369,7 @@ async def call_llm(
                 tool_name, args,
                 agent_id=agent_id,
                 user_id=user_id or agent_id,
+                session_id=session_id,
             )
             logger.debug(f"[LLM] Tool result: {result[:100]}")
 
@@ -374,13 +383,31 @@ async def call_llm(
                         "result": result,
                         "reasoning_content": full_reasoning_content
                     })
-                except Exception:
-                    pass
+                except Exception as _cb_err:
+                    logger.warning(f"[LLM] on_tool_call callback error: {_cb_err}")
+
+            # ── Vision injection for screenshot tools ──
+            # If the model supports vision, try to inject the actual screenshot
+            # image into the tool result so the LLM can SEE what's on screen.
+            # Without this, the LLM only gets text like "Screenshot saved to ..."
+            # and blindly guesses the page content.
+            tool_content: str | list = str(result)
+            if supports_vision and agent_id:
+                try:
+                    from app.services.vision_inject import try_inject_screenshot_vision
+                    from app.services.agent_tools import WORKSPACE_ROOT
+                    ws_path = WORKSPACE_ROOT / str(agent_id)
+                    vision_content = try_inject_screenshot_vision(tool_name, str(result), ws_path)
+                    if vision_content:
+                        tool_content = vision_content
+                        logger.info(f"[LLM] Injected screenshot vision for {tool_name}")
+                except Exception as e:
+                    logger.warning(f"[LLM] Vision injection failed for {tool_name}: {e}")
 
             api_messages.append(LLMMessage(
                 role="tool",
                 tool_call_id=tc["id"],
-                content=str(result),
+                content=tool_content,
             ))
 
     # Record tokens even on "too many rounds" exit
@@ -451,7 +478,8 @@ async def websocket_chat(
             agent_type = agent.agent_type or ""
             role_description = agent.role_description or ""
             welcome_message = agent.welcome_message or ""
-            ctx_size = agent.context_window_size or 100
+            from app.models.agent import DEFAULT_CONTEXT_WINDOW_SIZE
+            ctx_size = agent.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE
             logger.info(f"[WS] Agent: {agent_name}, type: {agent_type}, model_id: {agent.primary_model_id}, ctx: {ctx_size}")
 
             # Load the agent's primary model
@@ -460,7 +488,12 @@ async def websocket_chat(
                     select(LLMModel).where(LLMModel.id == agent.primary_model_id)
                 )
                 llm_model = model_result.scalar_one_or_none()
-                logger.info(f"[WS] Primary model loaded: {llm_model.model if llm_model else 'None'}")
+                # Treat disabled models as unavailable at runtime
+                if llm_model and not llm_model.enabled:
+                    logger.info(f"[WS] Primary model {llm_model.model} is disabled, skipping")
+                    llm_model = None
+                else:
+                    logger.info(f"[WS] Primary model loaded: {llm_model.model if llm_model else 'None'}")
 
             # Load fallback model
             if agent.fallback_model_id:
@@ -468,7 +501,11 @@ async def websocket_chat(
                     select(LLMModel).where(LLMModel.id == agent.fallback_model_id)
                 )
                 fallback_llm_model = fb_result.scalar_one_or_none()
-                if fallback_llm_model:
+                # Treat disabled fallback models as unavailable
+                if fallback_llm_model and not fallback_llm_model.enabled:
+                    logger.info(f"[WS] Fallback model {fallback_llm_model.model} is disabled, skipping")
+                    fallback_llm_model = None
+                elif fallback_llm_model:
                     logger.info(f"[WS] Fallback model loaded: {fallback_llm_model.model}")
 
             # Config-level fallback: primary missing -> use fallback
@@ -524,7 +561,7 @@ async def websocket_chat(
                     select(ChatMessage)
                     .where(ChatMessage.agent_id == agent_id, ChatMessage.conversation_id == conv_id)
                     .order_by(ChatMessage.created_at.desc())
-                    .limit(20)
+                    .limit(ctx_size)
                 )
                 history_messages = list(reversed(history_result.scalars().all()))
                 logger.info(f"[WS] Loaded {len(history_messages)} history messages for session {conv_id}")
@@ -543,6 +580,9 @@ async def websocket_chat(
         manager.active_connections[agent_id_str] = []
     manager.active_connections[agent_id_str].append((websocket, conv_id))
     logger.info(f"[WS] Ready! Agent={agent_name}")
+
+    # Send session_id to frontend so Take Control can reference the correct session
+    await websocket.send_json({"type": "connected", "session_id": conv_id})
 
     # Build conversation context from history
     # IMPORTANT: Include tool_call messages so the LLM maintains tool-calling behavior.
@@ -577,11 +617,16 @@ async def websocket_chat(
                 if tc_data.get("reasoning_content"):
                     asst_msg["reasoning_content"] = tc_data["reasoning_content"]
                 conversation.append(asst_msg)
-                # Tool result message
+                # Tool result message.
+                # Sanitize any stale [ImageID: ...] markers left by the ephemeral
+                # screenshot cache — those images are gone from memory and would
+                # confuse the LLM if sent as-is.
+                from app.services.vision_inject import sanitize_history_tool_result
+                sanitized_result = sanitize_history_tool_result(str(tc_result))
                 conversation.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
-                    "content": str(tc_result)[:500],
+                    "content": sanitized_result[:500],
                 })
             except Exception:
                 continue  # Skip malformed tool_call records
@@ -601,6 +646,13 @@ async def websocket_chat(
         while True:
             logger.info(f"[WS] Waiting for message from {agent_name}...")
             data = await websocket.receive_json()
+
+            # Set a unique trace ID for this specific message processing
+            from app.core.logging_config import set_trace_id
+            import uuid as _trace_uuid
+            trace_id = str(_trace_uuid.uuid4())[:12]
+            set_trace_id(trace_id)
+
             content = data.get("content", "")
             display_content = data.get("display_content", "")  # User-facing display text
             file_name = data.get("file_name", "")  # Original file name for attachment display
@@ -707,9 +759,39 @@ async def websocket_chat(
                         partial_chunks.append(text)
                         await websocket.send_json({"type": "chunk", "content": text})
                     
+                    # Track which agentbay live URLs have been sent to avoid redundant pushes
+                    _sent_live_envs: set[str] = set()
+
                     async def tool_call_to_ws(data: dict):
                         """Send tool call info to client and persist completed ones."""
+                        # ── AgentBay live preview: embed screenshot URL in tool_call message ──
+                        # We embed live preview data directly in the tool_call payload
+                        # because separate WebSocket messages get silently dropped by nginx.
+                        if data.get("status") == "done":
+                            try:
+                                from app.services.agentbay_live import detect_agentbay_env, get_desktop_screenshot, get_browser_snapshot
+                                import re as _re_live
+                                tool_name = data.get("name", "")
+                                env = detect_agentbay_env(tool_name)
+                                if env:
+                                    tool_result = data.get("result", "") or ""
+                                    if env == "desktop":
+                                        b64_url = await get_desktop_screenshot(agent_id, session_id=conv_id)
+                                        if b64_url:
+                                            data["live_preview"] = {"env": env, "screenshot_url": b64_url}
+                                            logger.info(f"[WS][LivePreview] Embedded {env} base64 in tool_call")
+                                    elif env == "browser":
+                                        b64_url = await get_browser_snapshot(agent_id, session_id=conv_id)
+                                        if b64_url:
+                                            data["live_preview"] = {"env": env, "screenshot_url": b64_url}
+                                            logger.info(f"[WS][LivePreview] Embedded {env} base64 in tool_call")
+                                    elif env == "code":
+                                        data["live_preview"] = {"env": "code", "output": tool_result[:5000]}
+                            except Exception as _lp_err:
+                                logger.warning(f"[WS][LivePreview] Embed failed: {_lp_err}")
+
                         await websocket.send_json({"type": "tool_call", **data})
+
                         # Save completed tool calls to DB so they persist in chat history
                         if data.get("status") == "done":
                             try:
@@ -751,6 +833,7 @@ async def websocket_chat(
                         role_description,
                         agent_id=agent_id,
                         user_id=user_id,
+                        session_id=conv_id,
                         on_chunk=stream_to_ws,
                         on_tool_call=tool_call_to_ws,
                         on_thinking=thinking_to_ws,
@@ -833,6 +916,7 @@ async def websocket_chat(
                                 role_description,
                                 agent_id=agent_id,
                                 user_id=user_id,
+                                session_id=conv_id,
                                 on_chunk=stream_to_ws,
                                 on_tool_call=tool_call_to_ws,
                                 on_thinking=thinking_to_ws,

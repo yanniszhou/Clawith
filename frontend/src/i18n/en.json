@@ -55,7 +55,6 @@
     "language": "Language",
     "plaza": "Plaza"
   },
-
   "auth": {
     "login": "Login",
     "register": "Register",
@@ -79,7 +78,48 @@
     "invitationHint": "Token consumption is significant, so invitation codes are required. We recommend deploying your own instance and configuring leading models for the best experience.",
     "usernamePlaceholder": "Enter username",
     "passwordPlaceholder": "Enter password",
-    "emailPlaceholder": "you@example.com"
+    "emailPlaceholder": "you@example.com",
+    "forgotPassword": "Forgot password?",
+    "forgotPasswordTitle": "Forgot password",
+    "forgotPasswordSubtitle": "Enter your account email and we will send a reset link if the account exists.",
+    "forgotEmailHint": "Forgot which email you used?",
+    "emailHintResult": "Email hint",
+    "emailHintFailed": "Failed to get email hint. User may not exist.",
+    "getEmailHint": "Get Email Hint",
+    "usernamePlaceholderHint": "Enter your account username",
+    "forgotPasswordRequestFailed": "Failed to request password reset",
+    "sendResetLink": "Send reset link",
+    "rememberedPassword": "Remembered your password?",
+    "backToLogin": "Back to login",
+    "resetPasswordTitle": "Reset password",
+    "resetPasswordSubtitle": "Choose a new password for your account.",
+    "resetPasswordMissingToken": "Reset token is missing from the link.",
+    "resetPasswordTooShort": "New password must be at least 6 characters.",
+    "resetPasswordMismatch": "Passwords do not match.",
+    "resetPasswordFailed": "Failed to reset password",
+    "resetPasswordSuccess": "Password updated. Redirecting to login...",
+    "newPassword": "New password",
+    "newPasswordPlaceholder": "At least 6 characters",
+    "confirmNewPassword": "Confirm new password",
+    "confirmNewPasswordPlaceholder": "Repeat your new password",
+    "updatePassword": "Update password",
+    "emailPlaceholderReset": "name@company.com",
+    "companyDisabled": "Your company has been disabled. Please contact the platform administrator.",
+    "invalidCredentials": "Invalid username or password.",
+    "accountDisabled": "Your account has been disabled.",
+    "notInOrganization": "This account does not belong to this organization.",
+    "serverStarting": "Service is starting up or experiencing issues. Please try again in a few seconds.",
+    "serverUnreachable": "Unable to reach server. Please check if the service is running and try again.",
+    "checkEmailVerification": "Registration successful! Please check your email and click the verification link to verify your account.",
+    "qrLogin": "QR Code Login",
+    "unifiedSSO": "Unified SSO Login",
+    "scanWithPlatform": "Please scan with Feishu, DingTalk, or WeCom",
+    "qrExpired": "QR code expired",
+    "qrSuccess": "Login success, redirecting...",
+    "refresh": "Refresh QR code",
+    "loginWithSSO": "Enterprise SSO Login",
+    "ssoNotice": "Enterprise SSO is enabled for this domain.",
+    "standardLogin": "Standard Login"
   },
   "roles": {
     "platformAdmin": "Platform Admin",
@@ -93,7 +133,8 @@
     "companyName": "Company Name",
     "create": "Create",
     "myCompany": "My Company",
-    "logout": "Log out"
+    "logout": "Log out",
+    "language": "Language"
   },
   "dashboard": {
     "greeting": {
@@ -188,7 +229,7 @@
       "title": "🤖 Model Config",
       "model": "🧠 Model",
       "provider": "🏢 Provider",
-      "contextRounds": "🔄 Context Rounds"
+      "contextRounds": "🔄 Context Window"
     },
     "actions": {
       "start": "Start",
@@ -287,7 +328,6 @@
       "heartbeatDesc": "Instructions for periodic awareness checks. The agent reads this file during each heartbeat.",
       "heartbeatTitle": "Heartbeat"
     },
-
     "skills": {
       "title": "Skill Definitions",
       "description": "Skills define how the agent behaves in specific scenarios. Each .md file is a skill. Use YAML frontmatter (name + description) for best results.",
@@ -355,9 +395,9 @@
       "primaryModel": "Primary Model",
       "fallbackModel": "Fallback Model",
       "noFallback": "No fallback",
-      "conversationContext": "Conversation Context",
-      "maxRounds": "Max Rounds",
-      "roundsDesc": "Maximum LLM call rounds per conversation",
+      "conversationContext": "Context Window",
+      "maxRounds": "Context Window Size",
+      "roundsDesc": "Number of recent messages included as context for each LLM request",
       "tokenLimits": "Token Limits",
       "dailyLimit": "Daily Limit",
       "monthlyLimit": "Monthly Limit",
@@ -439,8 +479,12 @@
       }
     },
     "tools": {
-      "platformTools": "Platform Tools",
-      "agentInstalled": "Agent-Installed Tools"
+      "platformTools": "Platform Preset Tools",
+      "companyTools": "Company Configured Tools",
+      "agentInstalled": "Agent Self-Installed Tools",
+      "noInstalled": "No tools installed yet",
+      "noCompany": "No company-configured tools",
+      "configured": "Configured"
     },
     "toolCategories": {
       "file": "File Operations",
@@ -585,7 +629,8 @@
       "skills": "Skills",
       "quotas": "Quotas",
       "users": "Users",
-      "invites": "Invitation Codes"
+      "invites": "Invitation Codes",
+      "identity": "OA Management"
     },
     "invites": {
       "pageTitle": "Invitation Codes",
@@ -604,6 +649,19 @@
       "active": "Active",
       "disable": "Disable",
       "exportCsv": "Export CSV"
+    },
+    "systemEmail": {
+      "title": "System Email Configuration",
+      "description": "Configure SMTP settings for sending system emails such as password resets and notifications.",
+      "fromAddress": "From Email Address",
+      "fromName": "From Name",
+      "smtpHost": "SMTP Host",
+      "smtpPort": "SMTP Port",
+      "username": "SMTP Username",
+      "password": "SMTP Password / App Password",
+      "timeout": "Timeout (seconds)",
+      "useSsl": "Use SSL/TLS",
+      "hint": "For Gmail, use an App Password. For QQ/163 mail, use the SMTP authorization code."
     },
     "quotas": {
       "defaultUserQuotas": "Default User Quotas",
@@ -653,6 +711,9 @@
       "maxOutputTokens": "Max Output Tokens",
       "maxOutputTokensPlaceholder": "Provider default",
       "maxOutputTokensDesc": "Override the default output token limit. Auto-filled from provider; adjust as needed.",
+      "requestTimeout": "Request Timeout (s)",
+      "requestTimeoutPlaceholder": "Leave empty for 120s default (300+ recommended for local models)",
+      "requestTimeoutDesc": "Override total HTTP timeout per request. Increase this for local models that are slow to generate.",
       "enabled": "Enabled",
       "disabled": "Disabled",
       "save": "Save",
@@ -743,7 +804,36 @@
       "searchMembers": "Search members...",
       "member": "Member",
       "admin": "Admin",
-      "noMembers": "No members"
+      "noMembers": "No members",
+      "syncSetupGuide": "Setup Guide & Required Permissions",
+      "feishuGuideText": "In the Feishu Developer Console, go to Permissions & Scopes -> Bulk Import/Export, and paste the following JSON:",
+      "feishuGuideWarning": "Important: After adding permissions, you must create and publish a new application version for them to take effect.",
+      "syncGuide": {
+        "feishu": {
+          "step1": "Go to open.feishu.cn → log in → Developer Console → Create Enterprise Self-Built App",
+          "step2": "Left sidebar → Credentials & Basic Info → copy App ID and App Secret, paste below and Setup",
+          "step3": "Left sidebar → Permissions & Scopes → click Bulk Import/Export Permissions → paste the permission JSON below → confirm import",
+          "step4": "[For SSO] Left sidebar → Add App Capabilities → add Web App (网页应用), and paste the SSO Login URL below into the Desktop and Mobile homepage fields",
+          "step5": "[For SSO] Left sidebar → Security Settings → Add the Redirect URL below into 'Redirect URLs'",
+          "step6": "[For SSO] Turn on the 'SSO Login' switch below. Team members can now log in via the SSO Login URL with one click.",
+          "step7": "Left sidebar → App Release → Create Version (set Availability to All Employees) → Release for Review → approve it in your admin console"
+        },
+        "dingtalk": {
+          "step1": "Go to open.dingtalk.com → log in → Developer Console → Create Enterprise Internal App → fill in name",
+          "step2": "App Features → click Add next to Contacts",
+          "step3": "App Info → copy AppKey and AppSecret",
+          "step4": "Contacts Permission → enable reading permissions for Departments and Members",
+          "step5": "Paste AppKey and AppSecret below → click Save",
+          "step6": "If you need SSO via DingTalk: Turn on the 'SSO Login' switch below, then in DingTalk configure: Login & Sharing → Add the 'Redirect URL' below as the Callback Domain. Share the 'SSO Login URL' with your team."
+        },
+        "wecom": {
+          "step1": "Log in to WeCom Admin Console → Management Tools → Address Book Sync",
+          "step2": "API Security → set the API visibility range to include the departments/users you want to sync",
+          "step3": "Copy CorpID and Secret",
+          "step4": "Paste CorpID and Secret below → click Save",
+          "step5": "If you need SSO via WeCom: Turn on the 'SSO Login' switch below, then in WeCom configure: App Management → Webpage Authorization → Set Trusted Domain to your URL domain. Share the 'SSO Login URL' with your team."
+        }
+      }
     },
     "config": {
       "title": "Platform Configuration",
@@ -754,6 +844,15 @@
       "save": "Save",
       "saved": "Saved",
       "themeColor": "Theme Color"
+    },
+    "broadcast": {
+      "title": "Broadcast Notification",
+      "description": "Send a notification to all users and agents in this company.",
+      "titlePlaceholder": "Notification title",
+      "bodyPlaceholder": "Optional details...",
+      "sendEmail": "Also send email to users with a configured address",
+      "send": "Send Broadcast",
+      "sentWithEmail": "Sent to {{users}} users, {{agents}} agents, and {{emails}} email recipients"
     },
     "kb": {
       "title": "Company Knowledge Base",
@@ -789,6 +888,23 @@
       "textPlaceholder": "e.g. 🎉 v2.1 released with new features!",
       "description": "Display a notification bar at the top of the page, visible to all users.",
       "preview": "Preview"
+    },
+    "identity": {
+      "title": "Organization & Directory Sync",
+      "addProvider": "Add Directory Provider",
+      "type": "Type",
+      "name": "Display Name",
+      "config": "Configuration (JSON)",
+      "configExample": "Configuration Example",
+      "deleteConfirm": "Are you sure you want to delete this OA provider?",
+      "providerHints": {
+        "feishu": "Feishu: Requires app_id, app_secret. Optional: encrypt_key, verification_token.",
+        "dingtalk": "DingTalk: Requires app_key, app_secret.",
+        "wecom": "WeCom: Requires corp_id, secret, agent_id.",
+        "oauth2": "OAuth2: Enter App ID, App Secret, Authorize URL, Token URL, User Info URL",
+        "saml": "SAML: Requires entry_point, issuer, cert (public key).",
+        "microsoft_teams": "Microsoft Teams: Requires client_id, client_secret, tenant_id."
+      }
     }
   },
   "common": {
@@ -836,6 +952,10 @@
   "channelGuide": {
     "setupGuide": "Setup Guide",
     "feishuPermJson": "Permission JSON (bulk import)",
+    "feishuPermBasic": "Basic",
+    "feishuPermFull": "Full",
+    "feishuPermBasicDesc": "Chat & messaging only",
+    "feishuPermFullDesc": "Includes Docs, Drive, Bitable, Calendar, Approval",
     "feishuPermCopy": "Copy",
     "feishuPermCopied": "✓ Copied",
     "slack": {

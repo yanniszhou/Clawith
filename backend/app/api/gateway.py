@@ -191,7 +191,7 @@ async def poll_messages(
     for r in h_result.scalars().all():
         if r.member:
             channels = []
-            if getattr(r.member, 'feishu_user_id', None) or getattr(r.member, 'feishu_open_id', None):
+            if getattr(r.member, 'external_id', None) or getattr(r.member, 'open_id', None):
                 channels.append("feishu")
             if getattr(r.member, 'email', None):
                 channels.append("email")
@@ -344,7 +344,6 @@ async def _send_to_agent_background(
     logger.info(f"[Gateway] _send_to_agent_background started: {source_agent_name} -> {target_agent_name}")
     try:
         from app.api.websocket import call_llm
-        from app.services.agent_context import build_agent_context
         from app.models.llm import LLMModel
         from app.models.audit import ChatMessage
         from app.models.chat_session import ChatSession
@@ -357,6 +356,10 @@ async def _send_to_agent_background(
             result = await db.execute(select(LLMModel).where(LLMModel.id == target_primary_model_id))
             model = result.scalar_one_or_none()
             if not model:
+                return
+            # Skip if model is disabled by admin
+            if not model.enabled:
+                logger.warning(f"Target agent {target_agent_name}'s model {model.model} is disabled, skipping")
                 return
 
             # Create or find a ChatSession for this agent pair
@@ -403,12 +406,11 @@ async def _send_to_agent_background(
             from datetime import datetime, timezone
             session.last_message_at = datetime.now(timezone.utc)
 
-            # Build system prompt for target agent
-            system_prompt = await build_agent_context(
-                target_agent_id, target_agent_name, target_role_description
-            )
-            system_prompt += (
-                "\n\n--- Agent-to-Agent Communication Alert ---\n"
+
+            # Agent-to-agent communication context (injected as prefix to user message
+            # since call_llm builds the full system prompt internally)
+            agent_comm_alert = (
+                "--- Agent-to-Agent Communication Alert ---\n"
                 f"You are receiving a direct message from another digital employee ({source_agent_name}). "
                 "CRITICAL INSTRUCTION: Your direct text reply will automatically be delivered back to them. "
                 "DO NOT use the `send_agent_message` tool to reply to this conversation. Just reply naturally in text.\n"
@@ -424,12 +426,12 @@ async def _send_to_agent_background(
             )
             hist_msgs = list(reversed(hist_result.scalars().all()))
 
-            messages = [{"role": "system", "content": system_prompt}]
+            messages = []
             for h in hist_msgs:
                 messages.append({"role": h.role, "content": h.content or ""})
 
-            # Add the new message
-            user_msg = f"[Message from agent: {source_agent_name}]\n{content}"
+            # Add the new message with agent communication context
+            user_msg = f"{agent_comm_alert}\n\n[Message from agent: {source_agent_name}]\n{content}"
             messages.append({"role": "user", "content": user_msg})
 
             from app.models.participant import Participant
@@ -603,7 +605,7 @@ async def send_message(
         )
 
     # Send via feishu if available
-    if (target_member.feishu_user_id or target_member.feishu_open_id) and (not channel_hint or channel_hint == "feishu"):
+    if (target_member.external_id or target_member.open_id) and (not channel_hint or channel_hint == "feishu"):
         from app.models.channel_config import ChannelConfig
         from app.services.feishu_service import feishu_service
         import json as _json
@@ -625,18 +627,18 @@ async def send_message(
 
         # Prefer user_id (tenant-stable, works across apps), fallback to open_id
         resp = None
-        if target_member.feishu_user_id:
+        if target_member.external_id:
             resp = await feishu_service.send_message(
                 config.app_id, config.app_secret,
-                receive_id=target_member.feishu_user_id,
+                receive_id=target_member.external_id,
                 msg_type="text",
                 content=_json.dumps({"text": content}, ensure_ascii=False),
                 receive_id_type="user_id",
             )
-        if (resp is None or resp.get("code") != 0) and target_member.feishu_open_id:
+        if (resp is None or resp.get("code") != 0) and target_member.open_id:
             resp = await feishu_service.send_message(
                 config.app_id, config.app_secret,
-                receive_id=target_member.feishu_open_id,
+                receive_id=target_member.open_id,
                 msg_type="text",
                 content=_json.dumps({"text": content}, ensure_ascii=False),
                 receive_id_type="open_id",
@@ -659,7 +661,7 @@ async def send_message(
     await db.commit()
     raise HTTPException(
         status_code=400,
-        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.feishu_user_id else 'no'}, feishu_open_id={'yes' if target_member.feishu_open_id else 'no'}"
+        detail=f"No available channel to reach {target_member.name}. feishu_user_id={'yes' if target_member.external_id else 'no'}, feishu_open_id={'yes' if target_member.open_id else 'no'}"
     )
 
 

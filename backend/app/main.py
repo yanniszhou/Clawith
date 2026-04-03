@@ -98,6 +98,9 @@ async def lifespan(app: FastAPI):
         import app.models.trigger        # noqa
         import app.models.notification   # noqa
         import app.models.gateway_message # noqa
+        import app.models.agent_credential  # noqa
+
+        import app.models.identity       # noqa
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("[startup] Database tables ready")
@@ -250,6 +253,7 @@ from app.api.tasks import router as tasks_router
 from app.api.files import router as files_router
 from app.api.websocket import router as ws_router
 from app.api.feishu import router as feishu_router
+from app.api.sso import router as sso_router
 from app.api.organization import router as org_router
 from app.api.enterprise import router as enterprise_router
 from app.api.advanced import router as advanced_router
@@ -279,12 +283,15 @@ from app.api.notification import router as notification_router
 from app.api.gateway import router as gateway_router
 from app.api.admin import router as admin_router
 from app.api.pages import router as pages_router, public_router as pages_public_router
+from app.api.agent_credentials import router as credentials_router
+from app.api.agentbay_control import router as agentbay_control_router
 
 app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX)
 app.include_router(tasks_router, prefix=settings.API_PREFIX)
 app.include_router(files_router, prefix=settings.API_PREFIX)
 app.include_router(feishu_router, prefix=settings.API_PREFIX)
+app.include_router(sso_router, prefix=settings.API_PREFIX)
 app.include_router(org_router, prefix=settings.API_PREFIX)
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX)
@@ -317,6 +324,8 @@ app.include_router(gateway_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX)
 app.include_router(pages_router, prefix=settings.API_PREFIX)
 app.include_router(pages_public_router)  # Public endpoint for /p/{short_id}, no API prefix
+app.include_router(credentials_router, prefix=settings.API_PREFIX)
+app.include_router(agentbay_control_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])

@@ -304,17 +304,29 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
                 # Find sessions for this agent from external channels
                 from sqlalchemy import cast as sa_cast, String as SaString
                 from app.models.user import User
+                from app.models.agent import Agent as AgentModel
 
-                # Look up user by display name or username
+                # 0. Get agent for tenant scoping
+                agent_r = await db.execute(select(AgentModel).where(AgentModel.id == trigger.agent_id))
+                agent = agent_r.scalar_one_or_none()
+
+                # Look up user by display name or username within tenant
                 from sqlalchemy import or_
-                user_r = await db.execute(
-                    select(User).where(
+                from app.models.user import User, Identity
+                query = (
+                    select(User)
+                    .join(User.identity)
+                    .where(
                         or_(
                             User.display_name.ilike(f"%{from_user_name}%"),
-                            User.username.ilike(f"%{from_user_name}%"),
+                            Identity.username.ilike(f"%{from_user_name}%"),
                         )
                     )
                 )
+                if agent and agent.tenant_id:
+                    query = query.where(User.tenant_id == agent.tenant_id)
+                
+                user_r = await db.execute(query)
                 target_user = user_r.scalars().first()
 
                 if target_user:
@@ -386,6 +398,10 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
             model = result.scalar_one_or_none()
             if not model:
                 return
+            # Skip invocation if model is disabled by admin
+            if not model.enabled:
+                logger.warning(f"Agent {agent.name}'s model {model.model} is disabled, skipping trigger invocation")
+                return
 
             # Build trigger context
             context_parts = []
@@ -433,12 +449,8 @@ async def _invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTr
             await db.flush()
             session_id = session.id
 
-            # Build system prompt
-            system_prompt = await build_agent_context(agent_id, agent.name, agent.role_description or "")
-
-            # Messages: system + trigger context
+            # Messages: trigger context only (call_llm builds system prompt internally)
             messages = [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": trigger_context},
             ]
 
