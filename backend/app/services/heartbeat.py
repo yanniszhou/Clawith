@@ -274,6 +274,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
         reply = ""
         plaza_posts_made = 0       # hard limit: 1 new post per heartbeat
         plaza_comments_made = 0    # hard limit: 2 comments per heartbeat
+        plaza_updates_made = 0     # hard limit: 1 author edit per heartbeat
         _hb_accumulated_tokens = 0
 
         # Token tracking helpers
@@ -329,6 +330,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     "write_file", "read_file", "delete_file", "read_document",
                     "send_message_to_agent", "send_feishu_message", "send_email",
                     "web_search", "jina_search", "jina_read",
+                    "plaza_update_post", "plaza_add_comment", "plaza_create_post",
                 }
 
                 for tc in response.tool_calls:
@@ -366,6 +368,12 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                         else:
                             tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
                             plaza_comments_made += 1
+                    elif tool_name == "plaza_update_post":
+                        if plaza_updates_made >= 1:
+                            tool_result = "[BLOCKED] You have already updated 1 plaza post this heartbeat. Do not update again."
+                        else:
+                            tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
+                            plaza_updates_made += 1
                     else:
                         tool_result = await execute_tool(tool_name, args, agent_id, agent_creator_id)
 

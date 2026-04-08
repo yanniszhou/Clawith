@@ -54,7 +54,7 @@ export default function ResetPassword() {
                     <div className="login-form-header">
                         <div className="login-form-logo">
                             <img src="/logo-black.png" className="login-logo-img" alt="" style={{ width: 28, height: 28, marginRight: 8, verticalAlign: 'middle' }} />
-                            Clawith
+                            iDataMate
                         </div>
                         <h2 className="login-form-title">{t('auth.resetPasswordTitle', 'Reset password')}</h2>
                         <p className="login-form-subtitle">

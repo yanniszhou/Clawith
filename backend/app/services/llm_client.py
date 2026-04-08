@@ -47,7 +47,12 @@ class LLMMessage:
             msg["tool_calls"] = self.tool_calls
         if self.tool_call_id:
             msg["tool_call_id"] = self.tool_call_id
-        if self.reasoning_content:
+        # Kimi / Moonshot (and some OpenAI-compatible thinking models) require
+        # reasoning_content on assistant messages that include tool_calls when
+        # thinking is enabled; omitting the key yields HTTP 400.
+        if self.role == "assistant" and self.tool_calls:
+            msg["reasoning_content"] = (self.reasoning_content or "").strip() or ""
+        elif self.reasoning_content:
             msg["reasoning_content"] = self.reasoning_content
         return msg
 
@@ -453,10 +458,13 @@ class OpenAICompatibleClient(LLMClient):
 
         choice = data.get("choices", [{}])[0]
         msg = choice.get("message", {})
+        # Non-stream responses may include reasoning (Kimi k2, DeepSeek-R1, etc.)
+        _rc = msg.get("reasoning_content")
 
         return LLMResponse(
             content=msg.get("content", ""),
             tool_calls=msg.get("tool_calls", []),
+            reasoning_content=_rc if _rc else None,
             finish_reason=choice.get("finish_reason"),
             usage=data.get("usage"),
             model=data.get("model"),

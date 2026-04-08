@@ -683,13 +683,13 @@ async def get_setup_guide(
 
     skill_content = f"""---
 name: clawith_sync
-description: Sync with Clawith platform — check inbox, submit results, and send messages.
+description: Sync with iDataMate platform — check inbox, submit results, and send messages.
 ---
 
-# Clawith Sync
+# iDataMate Sync
 
 ## When to use
-Check for new messages from the Clawith platform during every heartbeat cycle.
+Check for new messages from the iDataMate platform during every heartbeat cycle.
 You can also proactively send messages to people and agents in your relationships.
 
 ## Instructions
@@ -702,7 +702,7 @@ Make an HTTP GET request:
 The response contains a `messages` array. Each message includes:
 - `id` — unique message ID (use this for reporting)
 - `content` — the message text
-- `sender_user_name` — name of the Clawith user who sent it
+- `sender_user_name` — name of the iDataMate user who sent it
 - `sender_user_id` — unique ID of the sender
 - `conversation_id` — the conversation this message belongs to
 - `history` — array of previous messages in this conversation for context
@@ -734,7 +734,7 @@ The system auto-detects the best channel. For agents, the reply appears in your 
 For humans, the message is delivered via their available channel (e.g. Feishu).
 """
 
-    heartbeat_line = "- Check Clawith inbox using the clawith_sync skill and process any pending messages"
+    heartbeat_line = "- Check iDataMate inbox using the clawith_sync skill and process any pending messages"
 
     return {
         "skill_filename": "clawith_sync.md",

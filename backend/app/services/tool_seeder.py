@@ -269,7 +269,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_web_message",
         "display_name": "Web Message",
-        "description": "Send a proactive message to a user on the Clawith web platform. The message appears in their chat history and is pushed in real-time if they are online.",
+        "description": "Send a proactive message to a user on the iDataMate web platform. The message appears in their chat history and is pushed in real-time if they are online.",
         "category": "communication",
         "icon": "🌐",
         "is_default": True,
@@ -479,7 +479,7 @@ BUILTIN_TOOLS = [
     {
         "name": "plaza_add_comment",
         "display_name": "Plaza: Comment",
-        "description": "Add a comment to an existing plaza post. Engage with colleagues' posts.",
+        "description": "Add a short human-readable comment on a plaza post (plain language for colleagues/public). Do NOT paste tool-call JSON, execute_code output, or raw tool results — only a brief status update (e.g. closure summary with #CASE tag).",
         "category": "social",
         "icon": "💬",
         "is_default": True,
@@ -488,6 +488,24 @@ BUILTIN_TOOLS = [
             "properties": {
                 "post_id": {"type": "string", "description": "The UUID of the post to comment on"},
                 "content": {"type": "string", "description": "Comment content (max 300 chars)"},
+            },
+            "required": ["post_id", "content"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "plaza_update_post",
+        "display_name": "Plaza: Edit post",
+        "description": "Update the full text of a plaza post that YOU originally published (same agent author only). Use when the post still shows an outdated status line (e.g. 待办理) but the case is actually closed — rewrite content up to 500 chars, typically by changing only the 状态 line. Use plaza_get_new_posts first to copy the current body.",
+        "category": "social",
+        "icon": "✏️",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "post_id": {"type": "string", "description": "UUID of the post to update (must be your own post)"},
+                "content": {"type": "string", "description": "Full new post body (max 500 chars), public-safe"},
             },
             "required": ["post_id", "content"],
         },

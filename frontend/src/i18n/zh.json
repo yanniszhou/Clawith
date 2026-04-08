@@ -1,14 +1,14 @@
 {
   "app": {
-    "name": "iWorker",
+    "name": "iDataMate",
     "tagline": "企业数字员工平台"
   },
   "login": {
     "hero": {
-      "badge": "开源 · 多智能体协作",
-      "title": "Clawith",
+      "badge": "多智能体协作",
+      "title": "iDataMate",
       "subtitle": "OpenClaw for Teams",
-      "description": "OpenClaw 赋能个人。<br>Clawith 将其扩展到前沿组织。",
+      "description": "OpenClaw 赋能个人。<br>iDataMate 将其扩展到前沿组织。",
       "features": {
         "multiAgent": {
           "title": "多智能体团队",
@@ -1212,6 +1212,7 @@
         "plaza_get_new_posts": "广场：浏览",
         "plaza_create_post": "广场：发布",
         "plaza_add_comment": "广场：评论",
+        "plaza_update_post": "广场：编辑帖子",
         "execute_code": "代码执行器",
         "execute_code_e2b": "代码执行器 (E2B 云端)",
         "upload_image": "上传图片",
@@ -1263,7 +1264,7 @@
         "list_triggers": "列出所有活动触发器的详细信息。",
         "send_file_to_agent": "将文件发送给特定人员或返回当前对话。",
         "send_feishu_message": "向飞书用户或群组发送消息。",
-        "send_web_message": "在 Clawith 网页平台上向用户发送主动消息。",
+        "send_web_message": "在 iDataMate 网页平台上向用户发送主动消息。",
         "send_message_to_agent": "向数字员工同事发送消息并接收回复。",
         "web_search": "使用可配置的搜索引擎搜索互联网。",
         "jina_search": "使用 Jina AI 搜索互联网。",
@@ -1271,6 +1272,7 @@
         "plaza_get_new_posts": "从数字员工广场（共享社交动态）获取最新帖子。",
         "plaza_create_post": "向数字员工广场发布新帖子。",
         "plaza_add_comment": "为现有广场帖子添加评论。",
+        "plaza_update_post": "更新你自己发布过的广场帖全文（≤500 字），用于修正过时的「状态」等字段。",
         "execute_code": "在本地沙箱子进程中执行代码（Python、Bash、Node.js）。",
         "execute_code_e2b": "在安全的 E2B 云沙箱中执行代码（Python、Bash、Node.js）。",
         "upload_image": "将工作区或 URL 的图片上传到 ImageKit CDN。",
@@ -1430,16 +1432,16 @@
       "saved": "邮件模板已保存",
       "emailVerification": "邮箱验证码",
       "emailVerificationDesc": "用户注册并需要验证邮箱地址时发送。",
-      "emailVerificationSubject": "验证您的 Clawith 邮箱地址",
-      "emailVerificationBody": "您好 {{display_name}}，\n\n欢迎来到 Clawith！请使用以下 6 位数字验证码验证您的邮箱地址：\n\n验证码：{{verification_code}}\n\n此验证码将在 {{expiry_minutes}} 分钟后过期。如果您没有创建账号，可以忽略此邮件。",
+      "emailVerificationSubject": "验证您的 iDataMate 邮箱地址",
+      "emailVerificationBody": "您好 {{display_name}}，\n\n欢迎来到 iDataMate！请使用以下 6 位数字验证码验证您的邮箱地址：\n\n验证码：{{verification_code}}\n\n此验证码将在 {{expiry_minutes}} 分钟后过期。如果您没有创建账号，可以忽略此邮件。",
       "passwordReset": "密码重置",
       "passwordResetDesc": "用户请求重置密码时发送。",
-      "passwordResetSubject": "重置您的 Clawith 密码",
-      "passwordResetBody": "您好 {{display_name}}，\n\n我们收到了重置您 Clawith 密码的请求。\n\n重置链接：{{reset_url}}\n\n此链接将在 {{expiry_minutes}} 分钟后过期。如果您没有提出此请求，可以忽略此邮件。",
+      "passwordResetSubject": "重置您的 iDataMate 密码",
+      "passwordResetBody": "您好 {{display_name}}，\n\n我们收到了重置您 iDataMate 密码的请求。\n\n重置链接：{{reset_url}}\n\n此链接将在 {{expiry_minutes}} 分钟后过期。如果您没有提出此请求，可以忽略此邮件。",
       "companyInvitation": "公司邀请",
       "companyInvitationDesc": "管理员邀请用户加入公司时发送。",
-      "companyInvitationSubject": "{{inviter_name}} 邀请您加入 {{company_name}} 的 Clawith 团队",
-      "companyInvitationBody": "您好，\n\n{{inviter_name}} 邀请您加入他们在 Clawith 的团队\"{{company_name}}\"。\n\n要接受邀请并创建您的账号，请点击以下链接：\n\n{{invite_url}}\n\n如果您不想加入此团队或没有预期此邀请，可以忽略此邮件。"
+      "companyInvitationSubject": "{{inviter_name}} 邀请您加入 {{company_name}} 的 iDataMate 团队",
+      "companyInvitationBody": "您好，\n\n{{inviter_name}} 邀请您加入他们在 iDataMate 的团队\"{{company_name}}\"。\n\n要接受邀请并创建您的账号，请点击以下链接：\n\n{{invite_url}}\n\n如果您不想加入此团队或没有预期此邀请，可以忽略此邮件。"
     },
     "users": {
       "user": "用户",
@@ -1590,7 +1592,7 @@
     "ssoConfigDesc": "为公司开启 SSO 登录并设置专属访问域名。开启后，用户访问该域名将自动进入该公司的 SSO 流程。",
     "ssoEnabled": "启用 SSO",
     "ssoDomain": "专属访问域名",
-    "ssoDomainPlaceholder": "例如: acme.clawith.com",
+    "ssoDomainPlaceholder": "例如: acme.idatamate.com",
     "confirmDisable": "停用此公司？所有用户和数字员工将被暂停。",
     "showing": "{{start}}-{{end}} / {{total}}",
     "prev": "上一页",
@@ -1640,7 +1642,7 @@
     "keyNote": "API Key 已嵌入在上方指令中。如需手动配置可单独保存。",
     "goToAgent": "前往 Agent 页面",
     "nativeTitle": "平台托管",
-    "nativeDesc": "在 Clawith 平台上运行的完整 Agent",
+    "nativeDesc": "在 iDataMate 平台上运行的完整 Agent",
     "openclawTitle": "连接 OpenClaw",
     "openclawDesc": "连接你现有的 OpenClaw Agent",
     "basicTitle": "连接 OpenClaw Agent",

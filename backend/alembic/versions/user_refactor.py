@@ -34,6 +34,20 @@ def upgrade() -> None:
         )
     """)
 
+    # sso_login_enabled is formally added in add_sso_login_enabled; ensure it exists before any
+    # INSERT so pre-existing identity_providers tables (partial upgrades) do not violate NOT NULL.
+    # (asyncpg: one statement per op.execute)
+    op.execute(
+        "ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS sso_login_enabled BOOLEAN DEFAULT false"
+    )
+    op.execute(
+        "UPDATE identity_providers SET sso_login_enabled = false WHERE sso_login_enabled IS NULL"
+    )
+    op.execute("ALTER TABLE identity_providers ALTER COLUMN sso_login_enabled SET NOT NULL")
+    op.execute(
+        "ALTER TABLE identity_providers ALTER COLUMN sso_login_enabled SET DEFAULT false"
+    )
+
     # ============================================
     # 2. Create sso_scan_sessions table (no foreign keys for soft coupling)
     # ============================================

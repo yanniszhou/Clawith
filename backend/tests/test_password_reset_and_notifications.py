@@ -241,7 +241,7 @@ def test_send_system_email_uses_configured_timeout(monkeypatch):
 
     config = system_email_service.SystemEmailConfig(
         from_address="bot@example.com",
-        from_name="Clawith",
+        from_name="iDataMate",
         smtp_host="smtp.example.com",
         smtp_port=465,
         smtp_username="bot@example.com",
@@ -315,7 +315,7 @@ async def test_broadcast_notification_queues_email_delivery(monkeypatch):
     async def fake_resolve_email_config_async(db):
         return system_email_service.SystemEmailConfig(
             from_address="bot@example.com",
-            from_name="Clawith",
+            from_name="iDataMate",
             smtp_host="smtp.example.com",
             smtp_port=465,
             smtp_username="bot@example.com",

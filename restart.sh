@@ -1,5 +1,5 @@
 #!/bin/bash
-# Clawith — Restart Script
+# iDataMate — Restart Script
 # Usage: ./restart.sh [--source]
 #   --source  Force source (non-Docker) mode even if Docker is available
 
@@ -187,7 +187,8 @@ start_backend() {
         .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT \
         > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
-    wait_for_port $BACKEND_PORT "Backend" 10
+    # Backend startup may take >10s when seeding tools/skills on cold start.
+    wait_for_port $BACKEND_PORT "Backend" 30
 }
 
 # ═══════════════════════════════════════════════════════
@@ -226,7 +227,7 @@ print_info() {
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Clawith running!${NC}"
+    echo -e "${GREEN}  iDataMate running!${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
     echo -e "  ${CYAN}Local:${NC}   http://localhost:$FRONTEND_PORT"
@@ -244,7 +245,7 @@ run_docker_mode() {
     if [ "$FORCE_SOURCE" = true ]; then
         return 1
     fi
-    # Only switch to Docker mode when there are RUNNING Clawith containers
+    # Only switch to Docker mode when there are RUNNING iDataMate containers
     if command -v docker &>/dev/null && docker ps --filter 'name=clawith' --filter 'status=running' -q 2>/dev/null | grep -q .; then
         echo -e "${YELLOW}Detected running Docker containers. Starting in Docker mode...${NC}"
         echo -e "  ${YELLOW}Tip: use --source to force source (non-Docker) mode.${NC}"

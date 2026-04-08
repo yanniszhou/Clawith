@@ -510,7 +510,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_web_message",
-            "description": "Send a message to a user on the Clawith web platform. The message will appear in their web chat history and be pushed in real-time if they are online. Use this to proactively notify web users.",
+            "description": "Send a message to a user on the iDataMate web platform. The message will appear in their web chat history and be pushed in real-time if they are online. Use this to proactively notify web users.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2019,6 +2019,8 @@ async def execute_tool(
             result = await _plaza_create_post(agent_id, arguments)
         elif tool_name == "plaza_add_comment":
             result = await _plaza_add_comment(agent_id, arguments)
+        elif tool_name == "plaza_update_post":
+            result = await _plaza_update_post(agent_id, arguments)
         elif tool_name in ("execute_code", "execute_code_e2b"):
             logger.info(f"[DirectTool] Executing code ({tool_name}) with arguments: {arguments}")
             result = await _execute_code(agent_id, ws, arguments, tool_name=tool_name)
@@ -2694,7 +2696,12 @@ async def _execute_mcp_tool(tool_name: str, arguments: dict, agent_id=None) -> s
                 direct_api_key = await get_atlassian_api_key_for_agent(agent_id)
             except Exception:
                 pass
-        client = MCPClient(mcp_url, api_key=direct_api_key)
+        transport_hint = merged_config.get("transport") or merged_config.get("type")
+        client = MCPClient(
+            mcp_url,
+            api_key=direct_api_key,
+            transport=str(transport_hint) if transport_hint else None,
+        )
         return await client.call_tool(mcp_name, arguments)
 
     except Exception as e:
@@ -4363,6 +4370,19 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 "to deliver it. The other agent CANNOT access your workspace. "
                 "Never just tell them the path — always deliver explicitly.\n"
             )
+            # 办理专员：强制分阶段处置形态，避免首轮即宣称「已办结」
+            if target.name == "办理专员":
+                target_dynamic += (
+                    "\n\n** 诉求办理流程形态（必须遵守） **\n"
+                    "你是对内办理专员。收到 **诉求受理员** 或其它同事的转办时：\n"
+                    "- **禁止**在本轮多轮工具流程的**早期**就输出「已办结」「处理完毕」「诉求处理完毕」等终审结论（"
+                    "纯信息查询且无需外协的除外）。\n"
+                    "- **必须**先用 **write_file**（或 read 后追加）在 `workspace/cases/handling/` 更新该案办理记录，"
+                    "按顺序体现：接单 → 研判 → **【模拟】**外联/派单/到场等处置步骤（标明为演练、给出假定工单号或时间线）→ 复核。\n"
+                    "- 完成上述记录后，再用 **send_message_to_agent** 向 **诉求受理员** 报告**进展**或**办结摘要**。\n"
+                    "- 若用户消息中含 **plaza_post_id**，仅在流程与结论已写清后调用 **plaza_add_comment**（≤300 字，含 `#CASE-` 编号）。\n"
+                    "参考：`workspace/cases/handling/DISPOSAL_PLAYBOOK.md`。\n"
+                )
 
             # Load recent history for context
             conversation_messages: list[dict] = []
@@ -4423,6 +4443,7 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
             max_tool_rounds = target.max_tool_rounds or 50
             target_reply = ""
             _a2a_accumulated_tokens = 0
+            a2a_tools_called: set[str] = set()
 
             from app.services.token_tracker import record_token_usage, extract_usage_tokens, estimate_tokens_from_chars
 
@@ -4513,6 +4534,8 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                                     tool_args = {}
 
                             tool_result = await execute_tool(tool_name, tool_args, target.id, owner_id)
+                            if tool_name:
+                                a2a_tools_called.add(tool_name)
 
                             # Nudge: after write_file in A2A, remind to deliver via send_file_to_agent
                             if tool_name == "write_file" and isinstance(tool_result, str) and tool_result.startswith("\u2705"):
@@ -4564,6 +4587,32 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
             if not target_reply:
                 return f"⚠️ {target.name} did not respond (LLM returned empty)"
 
+            # Auto-sync plaza comment when the thread contains a plaza post id, the reply reads like
+            # case completion, and the model forgot to call plaza_add_comment (common for 办理专员).
+            plaza_pid = await _resolve_a2a_plaza_post_id(full_msgs, target.tenant_id)
+            if (
+                plaza_pid
+                and "plaza_add_comment" not in a2a_tools_called
+                and _a2a_reply_looks_like_completion(target_reply)
+            ):
+                summary = re.sub(r"\s+", " ", target_reply.strip())
+                if len(summary) > 260:
+                    summary = summary[:257] + "..."
+                comment_body = f"【办结同步】{summary}"[:300]
+                try:
+                    auto_res = await _plaza_add_comment(
+                        target.id,
+                        {"post_id": plaza_pid, "content": comment_body},
+                    )
+                    if auto_res and str(auto_res).lower().startswith("error"):
+                        logger.warning(f"[A2A] Auto plaza_add_comment failed: {auto_res[:200]}")
+                    else:
+                        logger.info(
+                            f"[A2A] Auto-synced plaza comment on post {plaza_pid} for agent {target.name}"
+                        )
+                except Exception as _ap_err:
+                    logger.warning(f"[A2A] Auto plaza_add_comment exception: {_ap_err}")
+
             # Save target reply
             async with async_session() as db2:
                 part_r = await db2.execute(select(Participant).where(Participant.type == "agent", Participant.ref_id == target.id))
@@ -4607,6 +4656,227 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 error_detail = "No detailed error message returned from upstream"
         return f"❌ Message send error ({error_type}): {error_detail[:200]}"
 
+
+def _a2a_last_user_text(full_msgs: list) -> str:
+    """Latest user-role message in the LLM transcript (current colleague handoff is usually last)."""
+    last = ""
+    for msg in full_msgs:
+        if getattr(msg, "role", None) == "user" and isinstance(getattr(msg, "content", None), str):
+            last = msg.content
+    return last
+
+
+def _extract_plaza_post_id_from_a2a_context(full_msgs: list) -> str | None:
+    """UUID for plaza sync: prefer the **latest** handoff user turn, else **last** match in full context.
+
+    Using the first match across the whole thread wrongly pins every case to the earliest plaza_post_id
+    (e.g. #CASE-004) when 004/005/006 share one A2A conversation.
+    """
+    _uuid = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    patterns = [
+        re.compile(rf"plaza_post_id\s*[=:：]\s*({_uuid})", re.I),
+        re.compile(rf"Post published!\s*\(ID:\s*({_uuid})\)", re.I),
+        re.compile(rf"广场帖\s*[iI][dD]\s*[:：]\s*({_uuid})"),
+    ]
+
+    def _last_uuid_in(text: str) -> str | None:
+        if not text:
+            return None
+        hits: list[tuple[int, str]] = []
+        for pat in patterns:
+            for m in pat.finditer(text):
+                hits.append((m.start(), m.group(1)))
+        if not hits:
+            return None
+        hits.sort(key=lambda x: x[0])
+        return hits[-1][1]
+
+    last_user = _a2a_last_user_text(full_msgs)
+    u = _last_uuid_in(last_user)
+    if u:
+        return u
+    combined = "\n".join(
+        (m.content or "")
+        for m in full_msgs
+        if getattr(m, "content", None) and isinstance(m.content, str)
+    )
+    return _last_uuid_in(combined)
+
+
+async def _resolve_plaza_post_id_by_case_tag(case_tag: str, tenant_id: uuid.UUID | None) -> str | None:
+    """Newest plaza post whose body contains this #CASE tag (tenant-scoped when tenant_id is set)."""
+    if not case_tag or not case_tag.startswith("#CASE-"):
+        return None
+    from app.models.plaza import PlazaPost
+    from sqlalchemy import desc as _desc
+
+    try:
+        async with async_session() as db:
+            q = (
+                select(PlazaPost)
+                .where(PlazaPost.content.contains(case_tag))
+                .order_by(_desc(PlazaPost.created_at))
+                .limit(1)
+            )
+            if tenant_id:
+                q = q.where(PlazaPost.tenant_id == tenant_id)
+            r = await db.execute(q)
+            post = r.scalar_one_or_none()
+            return str(post.id) if post else None
+    except Exception as e:
+        logger.warning(f"[A2A] resolve plaza post by case tag failed: {e}")
+        return None
+
+
+async def _resolve_a2a_plaza_post_id(full_msgs: list, tenant_id: uuid.UUID | None) -> str | None:
+    """Resolve which plaza thread this handoff belongs to: #CASE in latest user message wins, then UUID heuristics."""
+    last_user = _a2a_last_user_text(full_msgs)
+    mcase = re.search(r"#CASE-[A-Za-z0-9\-]+", last_user)
+    if mcase:
+        case_tag = mcase.group(0)
+        by_case = await _resolve_plaza_post_id_by_case_tag(case_tag, tenant_id)
+        if by_case:
+            return by_case
+    return _extract_plaza_post_id_from_a2a_context(full_msgs)
+
+
+def _a2a_reply_looks_like_completion(text: str) -> bool:
+    """Heuristic: final A2A reply indicates the appeal was handled (not still in progress)."""
+    if not text or len(text.strip()) < 4:
+        return False
+    if re.search(
+        r"未办结|尚未办结|未完成办理|暂未办结|还需|待后续|待办|无法办结|驳回|"
+        r"pending|not\s+yet\s+(completed|resolved)|still\s+in\s+progress",
+        text,
+        re.I,
+    ):
+        return False
+    return bool(
+        re.search(
+            r"(已办结|已处理|办理完毕|处理完毕|已完成办理|诉求已办结|办理完成|办结通知|处理结果|"
+            r"case\s+(has\s+been\s+)?closed|successfully\s+(handled|resolved)|completed\s+processing)",
+            text,
+            re.I,
+        )
+    )
+
+
+def _extract_case_tag_for_plaza(text: str) -> str | None:
+    m = re.search(r"#CASE-[A-Za-z0-9\-]+", text)
+    return m.group(0) if m else None
+
+
+def _skip_balanced_brace_object(text: str, start: int) -> int:
+    """Return index after a balanced {...} block starting at start; respects JSON strings."""
+    n = len(text)
+    if start >= n or text[start] != "{":
+        return start
+    depth = 0
+    i = start
+    in_str = False
+    esc = False
+    quote = ""
+    while i < n:
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                in_str = False
+                quote = ""
+        else:
+            if c in "\"'":
+                in_str = True
+                quote = c
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        i += 1
+    return n
+
+
+def _looks_like_tool_call_json_blob(blob: str) -> bool:
+    if '"name"' not in blob and "'name'" not in blob:
+        return False
+    if '"args"' not in blob and "'args'" not in blob and '"arguments"' not in blob:
+        return False
+    markers = (
+        '"execute_code"', '"write_file"', '"read_file"', '"delete_file"', '"list_files"',
+        '"read_document"', '"send_message_to_agent"', '"tool_call"',
+        '"status"', '"result"', '"done"',
+    )
+    return any(m in blob for m in markers)
+
+
+def _strip_serialized_tool_call_objects(text: str) -> str:
+    """Remove JSON objects that look like ChatMessage tool_call / execute_tool dumps."""
+    if not text or '{"name"' not in text:
+        return text
+    needle = '{"name"'
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        j = text.find(needle, i)
+        if j == -1:
+            out.append(text[i:])
+            break
+        out.append(text[i:j])
+        obj_start = j
+        end = _skip_balanced_brace_object(text, obj_start)
+        blob = text[obj_start:end]
+        if _looks_like_tool_call_json_blob(blob):
+            i = end
+            while i < n and text[i] in " \t\n\r,":
+                i += 1
+            continue
+        out.append(blob)
+        i = end
+    return "".join(out)
+
+
+def _plaza_comment_prose_too_thin(text: str) -> bool:
+    """True if little human-readable text remains (only tags / JSON residue)."""
+    t = re.sub(r"【[^】]*】", "", text)
+    t = re.sub(r"\[[^\]]*\]", "", t)
+    t = re.sub(r"\s+", "", t).strip()
+    if len(t) < 6:
+        return True
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    return cjk < 2 and len(t) < 20
+
+
+def _humanize_plaza_comment_for_public(raw: str, max_len: int = 300) -> str:
+    """Strip tool-call noise; keep readable Chinese (or short English) for plaza readers."""
+    _fb = "【办结】本案已办结，办理结果已同步至诉求受理侧，市民由受理员统一告知结论。"
+    if not raw or not str(raw).strip():
+        return _fb[:max_len]
+    original = str(raw).strip()
+    case_tag = _extract_case_tag_for_plaza(original)
+    t = original
+    for _ in range(8):
+        nxt = _strip_serialized_tool_call_objects(t)
+        if nxt == t:
+            break
+        t = nxt
+    t = re.sub(r"\s+", " ", t).strip().strip(" ,;，。、")
+    t = re.sub(r"^办结同步[】\]]\s*", "【办结同步】", t)
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", t))
+    json_residue = bool(re.search(r'["\']name["\']\s*:', t)) or (t.count("{") + t.count("}")) >= 2
+    if not t or _plaza_comment_prose_too_thin(t) or (json_residue and cjk_count < 6):
+        if case_tag:
+            msg = f"【办结】{case_tag} 已办结，办理结果已同步诉求受理员，市民侧由受理员统一答复。"
+        else:
+            msg = _fb
+        return msg[:max_len]
+    if len(t) > max_len:
+        t = t[: max_len - 1] + "…"
+    return t
 
 
 # Plaza Tools — Agent Square social feed
@@ -4731,8 +5001,13 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
     content = arguments.get("content", "").strip()
     if not content:
         return "Error: Comment content cannot be empty."
-    if len(content) > 300:
-        content = content[:300]
+    raw_comment = content
+    content = _humanize_plaza_comment_for_public(content, max_len=300)
+    if raw_comment != content and ('{"name"' in raw_comment or '"execute_code"' in raw_comment):
+        logger.info(
+            f"[Plaza] Sanitized noisy plaza_add_comment (agent_id={agent_id}): "
+            f"len_in={len(raw_comment)} len_out={len(content)}"
+        )
 
     try:
         pid = uuid.UUID(str(post_id))
@@ -4863,6 +5138,74 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
 
     except Exception as e:
         return f"Failed to add comment: {str(e)[:200]}"
+
+
+async def _plaza_update_post(agent_id: uuid.UUID, arguments: dict) -> str:
+    """Replace content of a plaza post; only the original agent author may update."""
+    from app.models.plaza import PlazaPost
+    from app.models.agent import Agent as AgentModel
+
+    post_id = arguments.get("post_id", "")
+    content = arguments.get("content", "").strip()
+    if not content:
+        return "Error: Post content cannot be empty."
+    if len(content) > 500:
+        content = content[:500]
+
+    try:
+        pid = uuid.UUID(str(post_id))
+    except Exception:
+        return "Error: Invalid post_id format."
+
+    try:
+        async with async_session() as db:
+            pr = await db.execute(select(PlazaPost).where(PlazaPost.id == pid))
+            post = pr.scalar_one_or_none()
+            if not post:
+                return "Error: Post not found."
+            if post.author_id != agent_id:
+                return "Error: Only the original author can update this post."
+            if post.author_type != "agent":
+                return "Error: Agent tool cannot edit human-authored posts."
+
+            ar = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
+            agent = ar.scalar_one_or_none()
+            if not agent:
+                return "Error: Agent not found."
+
+            post.content = content
+
+            try:
+                mentions = re.findall(r"@(\S+)", content)
+                if mentions:
+                    from app.services.notification_service import send_notification
+                    a_q = select(AgentModel).where(AgentModel.id != agent_id)
+                    if agent.tenant_id:
+                        a_q = a_q.where(AgentModel.tenant_id == agent.tenant_id)
+                    a_map = {a.name.lower(): a for a in (await db.execute(a_q)).scalars().all()}
+                    notified = set()
+                    for m in mentions:
+                        ma = a_map.get(m.lower())
+                        if ma and ma.id not in notified:
+                            notified.add(ma.id)
+                            await send_notification(
+                                db, agent_id=ma.id,
+                                type="mention",
+                                title=f"{agent.name} mentioned you in a plaza post (updated)",
+                                body=content[:150],
+                                link=f"/plaza?post={post.id}",
+                                ref_id=post.id,
+                                sender_name=agent.name,
+                            )
+            except Exception:
+                pass
+
+            await db.commit()
+            await db.refresh(post)
+            return f"Post updated successfully. (ID: {post.id})"
+
+    except Exception as e:
+        return f"Failed to update post: {str(e)[:200]}"
 
 
 # ─── Code Execution ─────────────────────────────────────────────

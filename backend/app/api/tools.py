@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -127,6 +127,8 @@ class ToolCreate(BaseModel):
     category: str = "custom"
     icon: str = "🔧"
     parameters_schema: dict = {}
+    # Optional MCP hints, e.g. {"transport": "sse"} — matches Cursor-style mcpServers JSON
+    config: dict = Field(default_factory=dict)
     mcp_server_url: str | None = None
     mcp_server_name: str | None = None
     mcp_tool_name: str | None = None
@@ -239,6 +241,7 @@ async def create_tool(
         category=data.category,
         icon=data.icon,
         parameters_schema=data.parameters_schema,
+        config=_encrypt_sensitive_fields(dict(data.config or {}), None),
         mcp_server_url=data.mcp_server_url,
         mcp_server_name=data.mcp_server_name,
         mcp_tool_name=data.mcp_tool_name,
@@ -399,6 +402,8 @@ class MCPTestRequest(BaseModel):
     # Optional standalone API Key. If provided, it is sent as
     # 'Authorization: Bearer {api_key}' and is NOT embedded in the URL.
     api_key: str | None = None
+    # Optional: "sse" or "streamable" — matches mcpServers JSON; skips probing the other transport.
+    transport: str | None = None
 
 
 @router.post("/test-mcp")
@@ -415,7 +420,11 @@ async def test_mcp_connection(
     from app.services.mcp_client import MCPClient
 
     try:
-        client = MCPClient(data.server_url, api_key=data.api_key or None)
+        client = MCPClient(
+            data.server_url,
+            api_key=data.api_key or None,
+            transport=data.transport,
+        )
         tools = await client.list_tools()
         return {"ok": True, "tools": tools}
     except Exception as e:

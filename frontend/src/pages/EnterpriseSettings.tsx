@@ -378,7 +378,7 @@ function OrgTab({ tenant }: { tenant: any }) {
                                 className="form-input"
                                 value={ssoDomain}
                                 onChange={e => setSsoDomain(e.target.value)}
-                                placeholder={t('enterprise.identity.ssoDomainPlaceholder', 'e.g. acme.clawith.com')}
+                                placeholder={t('enterprise.identity.ssoDomainPlaceholder', 'e.g. acme.idatamate.com')}
                                 style={{ fontSize: '13px', width: '100%', maxWidth: '400px' }}
                             />
                             <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '6px' }}>
@@ -1743,7 +1743,7 @@ export default function EnterpriseSettings() {
 
     const [allTools, setAllTools] = useState<any[]>([]);
     const [showAddMCP, setShowAddMCP] = useState(false);
-    const [mcpForm, setMcpForm] = useState({ server_url: '', server_name: '', api_key: '' });
+    const [mcpForm, setMcpForm] = useState({ server_url: '', server_name: '', api_key: '', transport: '' as string });
     const [mcpRawInput, setMcpRawInput] = useState('');
     const [mcpTestResult, setMcpTestResult] = useState<any>(null);
     const [mcpTesting, setMcpTesting] = useState(false);
@@ -2354,7 +2354,7 @@ export default function EnterpriseSettings() {
                                 className="form-input"
                                 value={companyIntro}
                                 onChange={e => setCompanyIntro(e.target.value)}
-                                placeholder={`# Company Name\nClawith\n\n# About\nOpenClaw\uD83E\uDD9E For Teams\nOpen Source \u00B7 Multi-OpenClaw Collaboration\n\nOpenClaw empowers individuals.\nClawith scales it to frontier organizations.`}
+                                placeholder={`# Company Name\niDataMate\n\n# About\nOpenClaw\uD83E\uDD9E For Teams\nMulti-OpenClaw Collaboration\n\nOpenClaw empowers individuals.\niDataMate scales it to frontier organizations.`}
                                 style={{
                                     minHeight: '200px', resize: 'vertical',
                                     fontFamily: 'var(--font-mono)', fontSize: '13px',
@@ -2605,11 +2605,17 @@ export default function EnterpriseSettings() {
                                                         const name = names[0];
                                                         const cfg = servers[name];
                                                         const url = cfg.url || cfg.uri || '';
-                                                        setMcpForm(p => ({ ...p, server_name: name, server_url: url }));
+                                                        const tr = cfg.transport || cfg.type || '';
+                                                        setMcpForm(p => ({
+                                                            ...p,
+                                                            server_name: name,
+                                                            server_url: url,
+                                                            transport: typeof tr === 'string' ? tr : '',
+                                                        }));
                                                     }
                                                 } catch {
                                                     // Not JSON — treat as plain URL
-                                                    setMcpForm(p => ({ ...p, server_url: val }));
+                                                    setMcpForm(p => ({ ...p, server_url: val, transport: '' }));
                                                 }
                                             }} placeholder={'{\n  "mcpServers": {\n    "server-name": {\n      "type": "sse",\n      "url": "https://mcp.example.com/sse"\n    }\n  }\n}\n\nor paste a URL directly'} style={{ minHeight: '120px', fontFamily: 'var(--font-mono)', fontSize: '12px', resize: 'vertical' }} />
                                         </div>
@@ -2617,6 +2623,7 @@ export default function EnterpriseSettings() {
                                             <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--text-secondary)', padding: '8px 12px', background: 'var(--bg-tertiary)', borderRadius: '6px' }}>
                                                 <span>Name: <strong>{mcpForm.server_name}</strong></span>
                                                 <span>URL: <strong>{mcpForm.server_url}</strong></span>
+                                                {mcpForm.transport && <span> · transport: <strong>{mcpForm.transport}</strong></span>}
                                             </div>
                                         )}
                                         {!mcpForm.server_name && (
@@ -2653,12 +2660,19 @@ export default function EnterpriseSettings() {
                                             <button className="btn btn-secondary" disabled={mcpTesting || !mcpForm.server_url} onClick={async () => {
                                                 setMcpTesting(true); setMcpTestResult(null);
                                                 try {
-                                                    const r = await fetchJson<any>('/tools/test-mcp', { method: 'POST', body: JSON.stringify({ server_url: mcpForm.server_url, api_key: mcpForm.api_key || undefined }) });
+                                                    const r = await fetchJson<any>('/tools/test-mcp', {
+                                                        method: 'POST',
+                                                        body: JSON.stringify({
+                                                            server_url: mcpForm.server_url,
+                                                            api_key: mcpForm.api_key || undefined,
+                                                            transport: mcpForm.transport || undefined,
+                                                        }),
+                                                    });
                                                     setMcpTestResult(r);
                                                 } catch (e: any) { setMcpTestResult({ ok: false, error: e.message }); }
                                                 setMcpTesting(false);
                                             }}>{mcpTesting ? t('enterprise.tools.testing') : t('enterprise.tools.testConnection')}</button>
-                                            <button className="btn btn-secondary" onClick={() => { setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '', api_key: '' }); setMcpRawInput(''); }}>{t('common.cancel')}</button>
+                                            <button className="btn btn-secondary" onClick={() => { setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '', api_key: '', transport: '' }); setMcpRawInput(''); }}>{t('common.cancel')}</button>
                                         </div>
                                         {mcpTestResult && (
                                             <div className="card" style={{ padding: '12px', background: mcpTestResult.ok ? 'rgba(0,200,100,0.1)' : 'rgba(255,0,0,0.1)' }}>
@@ -2682,6 +2696,7 @@ export default function EnterpriseSettings() {
                                                                                 type: 'mcp',
                                                                                 category: 'custom',
                                                                                 icon: '·',
+                                                                                config: mcpForm.transport ? { transport: mcpForm.transport } : {},
                                                                                 mcp_server_url: mcpForm.server_url,
                                                                                 mcp_server_name: serverName,
                                                                                 mcp_tool_name: tool.name,
@@ -2717,6 +2732,7 @@ export default function EnterpriseSettings() {
                                                                                 type: 'mcp',
                                                                                 category: 'custom',
                                                                                 icon: '·',
+                                                                                config: mcpForm.transport ? { transport: mcpForm.transport } : {},
                                                                                 mcp_server_url: mcpForm.server_url,
                                                                                 mcp_server_name: serverName,
                                                                                 mcp_tool_name: tool.name,
@@ -2735,7 +2751,7 @@ export default function EnterpriseSettings() {
                                                                     await fetchJson('/tools/mcp-server', { method: 'PUT', body: JSON.stringify({ server_name: serverName, server_url: mcpForm.server_url, api_key: mcpForm.api_key, tenant_id: selectedTenantId || undefined }) }).catch(() => {});
                                                                 }
                                                                 await loadAllTools();
-                                                                setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '', api_key: '' }); setMcpRawInput('');
+                                                                setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '', api_key: '', transport: '' }); setMcpRawInput('');
                                                                 if (errors.length > 0) {
                                                                     alert(`Imported ${successCount}/${tools.length} tools.\nFailed:\n${errors.join('\n')}`);
                                                                 }

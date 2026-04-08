@@ -1,14 +1,14 @@
 {
   "app": {
-    "name": "iWorker",
+    "name": "iDataMate",
     "tagline": "Enterprise Digital Employee Platform"
   },
   "login": {
     "hero": {
-      "badge": "Open Source · Multi-Agent Collaboration",
-      "title": "Clawith",
+      "badge": "Multi-Agent Collaboration",
+      "title": "iDataMate",
       "subtitle": "OpenClaw for Teams",
-      "description": "OpenClaw empowers individuals.<br>Clawith scales it to frontier organizations.",
+      "description": "OpenClaw empowers individuals.<br>iDataMate scales it to frontier organizations.",
       "features": {
         "multiAgent": {
           "title": "Multi-Agent Crew",
@@ -1099,6 +1099,7 @@
         "plaza_get_new_posts": "Plaza: Browse",
         "plaza_create_post": "Plaza: Post",
         "plaza_add_comment": "Plaza: Comment",
+        "plaza_update_post": "Plaza: Edit post",
         "execute_code": "Code Executor",
         "execute_code_e2b": "Code Executor (E2B Cloud)",
         "upload_image": "Upload Image",
@@ -1150,7 +1151,7 @@
         "list_triggers": "List all your active triggers with details.",
         "send_file_to_agent": "Send a file to a specific person or back to the current conversation.",
         "send_feishu_message": "Send a message to a Feishu user or group.",
-        "send_web_message": "Send a proactive message to a user on the Clawith web platform.",
+        "send_web_message": "Send a proactive message to a user on the iDataMate web platform.",
         "send_message_to_agent": "Send a message to a digital employee colleague and receive a reply.",
         "web_search": "Search the internet using a configurable search engine.",
         "jina_search": "Search the internet using Jina AI.",
@@ -1158,6 +1159,7 @@
         "plaza_get_new_posts": "Get recent posts from the Agent Plaza (shared social feed).",
         "plaza_create_post": "Publish a new post to the Agent Plaza.",
         "plaza_add_comment": "Add a comment to an existing plaza post.",
+        "plaza_update_post": "Replace the full text of a plaza post you authored (max 500 chars), e.g. to fix an outdated status line.",
         "execute_code": "Execute code (Python, Bash, Node.js) in a local sandboxed subprocess.",
         "execute_code_e2b": "Execute code (Python, Bash, Node.js) in a secure E2B cloud sandbox.",
         "upload_image": "Upload images from the workspace or a URL to ImageKit CDN.",
@@ -1365,16 +1367,16 @@
       "saved": "Email templates saved",
       "emailVerification": "Email Verification Code",
       "emailVerificationDesc": "Sent when a user registers and needs to verify their email address.",
-      "emailVerificationSubject": "Verify your Clawith email address",
-      "emailVerificationBody": "Hello {{display_name}},\n\nWelcome to Clawith! Please use the following 6-digit code to verify your email address:\n\nVerification code: {{verification_code}}\n\nThis code expires in {{expiry_minutes}} minutes. If you did not create an account, you can ignore this email.",
+      "emailVerificationSubject": "Verify your iDataMate email address",
+      "emailVerificationBody": "Hello {{display_name}},\n\nWelcome to iDataMate! Please use the following 6-digit code to verify your email address:\n\nVerification code: {{verification_code}}\n\nThis code expires in {{expiry_minutes}} minutes. If you did not create an account, you can ignore this email.",
       "passwordReset": "Password Reset",
       "passwordResetDesc": "Sent when a user requests to reset their password.",
-      "passwordResetSubject": "Reset your Clawith password",
-      "passwordResetBody": "Hello {{display_name}},\n\nWe received a request to reset your Clawith password.\n\nReset link: {{reset_url}}\n\nThis link expires in {{expiry_minutes}} minutes. If you did not request this, you can ignore this email.",
+      "passwordResetSubject": "Reset your iDataMate password",
+      "passwordResetBody": "Hello {{display_name}},\n\nWe received a request to reset your iDataMate password.\n\nReset link: {{reset_url}}\n\nThis link expires in {{expiry_minutes}} minutes. If you did not request this, you can ignore this email.",
       "companyInvitation": "Company Invitation",
       "companyInvitationDesc": "Sent when an admin invites a user to join their company.",
-      "companyInvitationSubject": "{{inviter_name}} invited you to join {{company_name}} on Clawith",
-      "companyInvitationBody": "Hello,\n\n{{inviter_name}} has invited you to join their team '{{company_name}}' on Clawith.\n\nTo accept the invitation and create your account, please click the link below:\n\n{{invite_url}}\n\nIf you don't want to join this team or didn't expect this invitation, you can ignore this email."
+      "companyInvitationSubject": "{{inviter_name}} invited you to join {{company_name}} on iDataMate",
+      "companyInvitationBody": "Hello,\n\n{{inviter_name}} has invited you to join their team '{{company_name}}' on iDataMate.\n\nTo accept the invitation and create your account, please click the link below:\n\n{{invite_url}}\n\nIf you don't want to join this team or didn't expect this invitation, you can ignore this email."
     },
     "timezone": {
       "title": "Company Timezone",
@@ -1481,7 +1483,8 @@
     "type": "Type",
     "never": "Never",
     "model": "Model",
-    "managedBy": "Managed by OpenClaw"
+    "managedBy": "Managed by OpenClaw",
+    "nativeDesc": "Full agent running on iDataMate platform"
   },
   "channelGuide": {
     "setupGuide": "Setup Guide",
@@ -1714,6 +1717,6 @@
     "ssoConfigDesc": "Configure SSO and custom domain for this company.",
     "ssoEnabled": "Enable SSO",
     "ssoDomain": "Custom Access Domain",
-    "ssoDomainPlaceholder": "e.g. acme.clawith.com"
+    "ssoDomainPlaceholder": "e.g. acme.idatamate.com"
   }
 }

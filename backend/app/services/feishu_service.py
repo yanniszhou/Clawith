@@ -414,7 +414,7 @@ class FeishuService:
         })
         # Simplified — in production, use Feishu interactive card JSON
         text_content = json.dumps({
-            "text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 Clawith 平台审批。"
+            "text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 iDataMate 平台审批。"
         })
         return await self.send_message(app_id, app_secret, creator_open_id, "text", text_content)
 

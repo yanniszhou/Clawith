@@ -75,7 +75,7 @@ class DingTalkStreamManager:
             main_loop = self._main_loop
 
             class ClawithChatbotHandler(dingtalk_stream.ChatbotHandler):
-                """Custom handler that dispatches messages to the Clawith LLM pipeline."""
+                """Custom handler that dispatches messages to the iDataMate LLM pipeline."""
 
                 async def process(self, callback: dingtalk_stream.CallbackMessage):
                     """Handle incoming bot message from DingTalk Stream.
