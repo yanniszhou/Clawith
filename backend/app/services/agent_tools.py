@@ -7636,7 +7636,7 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: dict) -> str:
     token = await feishu_service.get_tenant_access_token(app_id, app_secret)
 
     # ── Load local contacts cache ─────────────────────────────────────────────
-    _cache_file = _pl.Path(f"/data/workspaces/{agent_id}/feishu_contacts_cache.json")
+    _cache_file = WORKSPACE_ROOT / str(agent_id) / "feishu_contacts_cache.json"
     _cached_users: list[dict] = []
     try:
         if _cache_file.exists():
@@ -7740,7 +7740,7 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: dict) -> str:
 async def _feishu_contacts_refresh(agent_id: uuid.UUID) -> None:
     """Force-clear the local contacts cache so next search re-fetches from API."""
     import pathlib as _pl
-    _cache_file = _pl.Path("/data/workspaces") / str(agent_id) / "feishu_contacts_cache.json"
+    _cache_file = WORKSPACE_ROOT / str(agent_id) / "feishu_contacts_cache.json"
     try:
         if _cache_file.exists():
             _cache_file.unlink()

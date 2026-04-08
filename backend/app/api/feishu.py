@@ -29,6 +29,74 @@ _LLM_TIMEOUT_SECONDS_DEFAULT = 180.0
 # Shows the last N non-running lines plus any active "running" entry.
 _TOOL_STATUS_KEEP_LINES = 20
 
+# Text message body ~150 KB per message on Feishu; chunk below that with margin.
+_FEISHU_TEXT_CHUNK_SAFE_BYTES = 90000
+
+
+def _feishu_chunk_plain_text(text: str, max_bytes: int = _FEISHU_TEXT_CHUNK_SAFE_BYTES) -> list[str]:
+    """Split text into chunks under max UTF-8 bytes, preferring newline boundaries."""
+    if not text:
+        return []
+    enc = text.encode("utf-8")
+    if len(enc) <= max_bytes:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(enc):
+        end = min(start + max_bytes, len(enc))
+        if end < len(enc):
+            window = enc[start:end]
+            nl = window.rfind(b"\n", max_bytes * 2 // 3)
+            if nl >= 0:
+                end = start + nl + 1
+        chunks.append(enc[start:end].decode("utf-8", errors="strict"))
+        start = end
+    return chunks
+
+
+async def _feishu_send_text_chunks(
+    *,
+    feishu_svc,
+    app_id: str,
+    app_secret: str,
+    receive_id: str,
+    receive_id_type: str,
+    full_text: str,
+    stage_prefix: str,
+) -> None:
+    """Send long replies as multiple text messages (within ~150 KB / message)."""
+    import json as _j
+    parts = _feishu_chunk_plain_text(full_text)
+    for i, part in enumerate(parts):
+        header = f"📄 ({i + 1}/{len(parts)})\n\n" if len(parts) > 1 else ""
+        await feishu_svc.send_message(
+            app_id,
+            app_secret,
+            receive_id,
+            "text",
+            _j.dumps({"text": header + part}, ensure_ascii=False),
+            receive_id_type=receive_id_type,
+            stage=f"{stage_prefix}_chunk{i}",
+        )
+
+
+def _build_feishu_simple_stream_card(
+    answer_text: str,
+    *,
+    streaming: bool = False,
+    agent_name: str = "AI",
+) -> dict:
+    """Minimal interactive card for image streaming (no tool/thinking sections)."""
+    body = answer_text + ("▌" if streaming and answer_text else ("..." if streaming else ""))
+    return {
+        "config": {"update_multi": True},
+        "header": {
+            "template": "blue",
+            "title": {"content": agent_name, "tag": "plain_text"},
+        },
+        "elements": [{"tag": "markdown", "content": body or "..."}],
+    }
+
 
 def _get_llm_timeout(model) -> float:
     """Get effective LLM timeout for the Feishu channel.
@@ -518,8 +586,9 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                             if sender_name and sender_open_id:
                                 try:
                                     import pathlib as _pl, json as _cj, time as _ct
+                                    from app.config import get_settings as _gs_feishu_cache
                                     _safe_id = str(agent_id).replace("..", "").replace("/", "")
-                                    _cache = _pl.Path(f"/data/workspaces/{_safe_id}/feishu_contacts_cache.json")
+                                    _cache = _pl.Path(_gs_feishu_cache().AGENT_DATA_DIR) / _safe_id / "feishu_contacts_cache.json"
                                     _cache.parent.mkdir(parents=True, exist_ok=True)
                                     _existing = {}
                                     if _cache.exists():
@@ -670,30 +739,48 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                     )
             _cfs_token = _cfs.set(_feishu_file_sender)
 
-            # Set up streaming response via interactive card
+            # Set up streaming response via interactive card, or plain-text-only mode (no card).
             import json as _json_card
+            from app.config import get_settings as _gs_feishu_stream
+            _use_plain_text_reply = _gs_feishu_stream().FEISHU_PLAIN_TEXT_REPLY
+            if _use_plain_text_reply:
+                logger.info("[Feishu] Plain-text reply mode (FEISHU_PLAIN_TEXT_REPLY=true), skipping interactive card")
 
-            # Send initial loading card
-            init_card = {
-                "config": {"update_multi": True},
-                "header": {"template": "blue", "title": {"content": "思考中...", "tag": "plain_text"}},
-                "elements": [{"tag": "markdown", "content": "..."}]
-            }
             msg_id_for_patch = None
-            try:
-                if chat_type == "group" and chat_id:
-                    init_resp = await feishu_service.send_message(
-                        config.app_id, config.app_secret, chat_id, "interactive",
-                        _json_card.dumps(init_card), receive_id_type="chat_id", stage="stream_init_card"
+            if _use_plain_text_reply:
+                try:
+                    await feishu_service.send_message(
+                        config.app_id,
+                        config.app_secret,
+                        _reply_to_id,
+                        "text",
+                        _json_card.dumps({"text": "⏳ 正在生成回复…"}),
+                        receive_id_type=_rid_type,
+                        stage="plain_text_typing",
                     )
-                else:
-                    init_resp = await feishu_service.send_message(
-                        config.app_id, config.app_secret, sender_open_id, "interactive",
-                        _json_card.dumps(init_card), receive_id_type="open_id", stage="stream_init_card"
-                    )
-                msg_id_for_patch = init_resp.get("data", {}).get("message_id")
-            except Exception as e:
-                logger.error(f"[Feishu] Failed to send init stream card: {e}")
+                except Exception as e:
+                    logger.warning(f"[Feishu] Plain-text mode typing hint failed: {e}")
+            else:
+                # Send initial loading card
+                init_card = {
+                    "config": {"update_multi": True},
+                    "header": {"template": "blue", "title": {"content": "思考中...", "tag": "plain_text"}},
+                    "elements": [{"tag": "markdown", "content": "..."}]
+                }
+                try:
+                    if chat_type == "group" and chat_id:
+                        init_resp = await feishu_service.send_message(
+                            config.app_id, config.app_secret, chat_id, "interactive",
+                            _json_card.dumps(init_card), receive_id_type="chat_id", stage="stream_init_card"
+                        )
+                    else:
+                        init_resp = await feishu_service.send_message(
+                            config.app_id, config.app_secret, sender_open_id, "interactive",
+                            _json_card.dumps(init_card), receive_id_type="open_id", stage="stream_init_card"
+                        )
+                    msg_id_for_patch = init_resp.get("data", {}).get("message_id")
+                except Exception as e:
+                    logger.error(f"[Feishu] Failed to send init stream card: {e}")
 
             _stream_buffer = []
             _thinking_buffer = []
@@ -890,8 +977,23 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 _cfso.reset(_cfso_token)
             logger.info(f"[Feishu] LLM reply: {reply_text[:100]}")
 
-            # Send final card update or fallback text
-            if msg_id_for_patch:
+            # Send final card update, plain-text reply, or fallback text
+            _feishu_recv = chat_id if chat_type == "group" and chat_id else sender_open_id
+            _feishu_recv_type = "chat_id" if chat_type == "group" and chat_id else "open_id"
+            if _use_plain_text_reply:
+                try:
+                    await _feishu_send_text_chunks(
+                        feishu_svc=feishu_service,
+                        app_id=config.app_id,
+                        app_secret=config.app_secret,
+                        receive_id=_feishu_recv,
+                        receive_id_type=_feishu_recv_type,
+                        full_text=reply_text,
+                        stage_prefix="plain_text_reply",
+                    )
+                except Exception as e:
+                    logger.error(f"[Feishu] Plain-text reply chunks failed: {e}")
+            elif msg_id_for_patch:
                 try:
                     await _patch_queue.drain()
                 except Exception as e:
@@ -911,38 +1013,30 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                     )
                 except Exception as e:
                     logger.error(f"[Feishu] Final card patch failed: {e}")
-                    if chat_type == "group" and chat_id:
-                        await feishu_service.send_message(
-                            config.app_id,
-                            config.app_secret,
-                            chat_id,
-                            "text",
-                            _json.dumps({"text": reply_text}),
-                            receive_id_type="chat_id",
-                            stage="stream_final_fallback_text",
+                    try:
+                        await _feishu_send_text_chunks(
+                            feishu_svc=feishu_service,
+                            app_id=config.app_id,
+                            app_secret=config.app_secret,
+                            receive_id=_feishu_recv,
+                            receive_id_type=_feishu_recv_type,
+                            full_text=reply_text,
+                            stage_prefix="stream_final_fallback",
                         )
-                    else:
-                        await feishu_service.send_message(
-                            config.app_id,
-                            config.app_secret,
-                            sender_open_id,
-                            "text",
-                            _json.dumps({"text": reply_text}),
-                            stage="stream_final_fallback_text",
-                        )
+                    except Exception as e2:
+                        logger.error(f"[Feishu] Final fallback text chunks failed: {e2}")
             else:
                 # Fallback to plain text if card creation failed
                 try:
-                    if chat_type == "group" and chat_id:
-                        await feishu_service.send_message(
-                            config.app_id, config.app_secret, chat_id, "text",
-                            _json.dumps({"text": reply_text}), receive_id_type="chat_id", stage="stream_no_card_fallback_text",
-                        )
-                    else:
-                        await feishu_service.send_message(
-                            config.app_id, config.app_secret, sender_open_id, "text",
-                            _json.dumps({"text": reply_text}), stage="stream_no_card_fallback_text",
-                        )
+                    await _feishu_send_text_chunks(
+                        feishu_svc=feishu_service,
+                        app_id=config.app_id,
+                        app_secret=config.app_secret,
+                        receive_id=_feishu_recv,
+                        receive_id_type=_feishu_recv_type,
+                        full_text=reply_text,
+                        stage_prefix="stream_no_card_fallback",
+                    )
                 except Exception as e:
                     logger.error(f"[Feishu] Failed to send fallback message: {e}")
 
@@ -1221,17 +1315,13 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
         async def _flush_image_stream(reason: str, force: bool = False):
             """Build and enqueue an image streaming card update.
 
-            Reuses _build_card so the image path supports the same thinking
-            and tool-status sections as the text streaming path.
             Skips the patch on heartbeat ticks when content has not changed.
             """
             nonlocal _img_last_flush, _img_last_flushed_hash
             now = time.time()
             if not force and now - _img_last_flush < _img_flush_interval:
                 return
-            # Reuse the shared card builder (no tool_status for image path yet,
-            # but the builder is ready to accept them in the future).
-            _card = _build_card(
+            _card = _build_feishu_simple_stream_card(
                 "".join(_img_stream_buf),
                 streaming=True,
                 agent_name=_agent_name,
@@ -1282,8 +1372,7 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
                 await _img_patch_queue.drain()
             except Exception as _e_drain:
                 logger.warning(f"[Feishu] Image patch queue drain failed: {_e_drain}")
-            # Build final card via shared builder (consistent with text streaming path).
-            _final_card = _build_card(
+            _final_card = _build_feishu_simple_stream_card(
                 reply_text or "...",
                 streaming=False,
                 agent_name=_agent_name,

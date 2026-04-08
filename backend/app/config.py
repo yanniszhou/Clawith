@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     FEISHU_APP_SECRET: str = ""
     FEISHU_REDIRECT_URI: str = ""
     PUBLIC_BASE_URL: str = ""
+    # Bot channel: plain text replies instead of streaming interactive cards (~30KB card limit).
+    FEISHU_PLAIN_TEXT_REPLY: bool = False
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
