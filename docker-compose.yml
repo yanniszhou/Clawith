@@ -43,6 +43,7 @@ services:
       CORS_ORIGINS: '["*"]'
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_PLAIN_TEXT_REPLY: ${FEISHU_PLAIN_TEXT_REPLY:-false}
       DOCKER_NETWORK: clawith_network
       SS_CONFIG_FILE: /data/ss-nodes.json
       # Public base URL for constructing OAuth callback URLs and email links.
