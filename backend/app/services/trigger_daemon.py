@@ -303,8 +303,8 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
                 # --- Human user message check (Feishu/Slack/Discord) ---
                 # Find sessions for this agent from external channels
                 from sqlalchemy import cast as sa_cast, String as SaString
-                from app.models.user import User
                 from app.models.agent import Agent as AgentModel
+                from app.models.user import Identity, User
 
                 # 0. Get agent for tenant scoping
                 agent_r = await db.execute(select(AgentModel).where(AgentModel.id == trigger.agent_id))
@@ -312,10 +312,10 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
 
                 # Look up user by display name or username within tenant
                 from sqlalchemy import or_
-                from app.models.user import User, Identity
+                # outerjoin: channel users should have Identity, but display_name-only match must not drop rows
                 query = (
                     select(User)
-                    .join(User.identity)
+                    .outerjoin(Identity, User.identity_id == Identity.id)
                     .where(
                         or_(
                             User.display_name.ilike(f"%{from_user_name}%"),
@@ -325,18 +325,21 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
                 )
                 if agent and agent.tenant_id:
                     query = query.where(User.tenant_id == agent.tenant_id)
-                
-                user_r = await db.execute(query)
-                target_user = user_r.scalars().first()
 
-                if target_user:
-                    # Find channel sessions for this user with this agent
+                # Cap broad name matches (e.g. single-character names) to keep queries bounded
+                query = query.limit(50)
+                user_r = await db.execute(query)
+                target_user_ids = [u.id for u in user_r.scalars().all()]
+
+                if target_user_ids:
+                    # Multiple Users can share the same display_name (e.g. channel lazy-reg vs SSO);
+                    # .first() picked the wrong row and never matched Feishu ChatSession.user_id.
                     result = await db.execute(
                         select(ChatMessage).join(
                             ChatSession, ChatMessage.conversation_id == sa_cast(ChatSession.id, SaString)
                         ).where(
                             ChatSession.agent_id == trigger.agent_id,
-                            ChatSession.user_id == target_user.id,
+                            ChatSession.user_id.in_(target_user_ids),
                             ChatSession.source_channel.in_(["feishu", "slack", "discord"]),
                             ChatMessage.role == "user",
                             ChatMessage.created_at > since,
@@ -357,6 +360,15 @@ async def _check_new_agent_messages(trigger: AgentTrigger) -> bool:
 
                 msg = result.scalar_one_or_none()
                 if not msg:
+                    logger.debug(
+                        "on_message miss: trigger={} agent_id={} from_user_name={} "
+                        "matched_user_ids_n={} since={}",
+                        trigger.name,
+                        trigger.agent_id,
+                        from_user_name,
+                        len(target_user_ids),
+                        since,
+                    )
                     return False
                 cfg["_matched_message"] = (msg.content or "")[:2000]
                 cfg["_matched_from"] = from_user_name
