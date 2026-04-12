@@ -2,18 +2,20 @@
 
 import asyncio
 import json
-import threading
-from typing import Any, Dict
+from typing import Any
+
 import uuid
 
 from loguru import logger
+
 try:
     import lark_oapi as lark
     import lark_oapi.ws as ws
+
     _HAS_LARK = True
 except ImportError:
     lark = None  # type: ignore
-    ws = None    # type: ignore
+    ws = None  # type: ignore
     _HAS_LARK = False
 
 from app.database import async_session
@@ -29,68 +31,117 @@ if not _HAS_LARK:
     )
 
 
+def _lark_ws_payload_to_body_dict(data: Any) -> dict | None:
+    """Turn Lark SDK WS callback payload into the same dict shape as the HTTP webhook body.
+
+    The sync callback often runs on a worker thread (no running asyncio loop); parsing here
+    keeps a single code path before we hand off to the main loop.
+    """
+    raw_body = getattr(data, "raw_body", None)
+    if isinstance(data, dict):
+        if data.get("header") is not None or data.get("event") is not None:
+            return data
+        return None
+
+    if raw_body:
+        try:
+            return json.loads(raw_body.decode("utf-8"))
+        except Exception as e:
+            logger.warning(f"[Feishu WS] Failed to parse raw_body: {e}")
+            return None
+
+    body_dict: dict = {}
+    if hasattr(data, "header"):
+        header_obj = data.header
+        if hasattr(header_obj, "__dict__"):
+            body_dict["header"] = dict(vars(header_obj))
+        else:
+            body_dict["header"] = {
+                "event_type": getattr(header_obj, "event_type", "im.message.receive_v1"),
+                "event_id": getattr(header_obj, "event_id", ""),
+                "create_time": getattr(header_obj, "create_time", ""),
+            }
+        if "event_type" not in body_dict["header"]:
+            body_dict["header"]["event_type"] = getattr(
+                header_obj, "event_type", "im.message.receive_v1"
+            )
+    else:
+        body_dict["header"] = {"event_type": "im.message.receive_v1"}
+
+    if hasattr(data, "event"):
+        ev = data.event
+        if isinstance(ev, dict):
+            body_dict["event"] = ev
+        elif hasattr(ev, "__dict__"):
+            body_dict["event"] = dict(vars(ev))
+        else:
+            body_dict["event"] = ev
+    elif hasattr(data, "content") and isinstance(getattr(data, "content", None), str):
+        try:
+            body_dict["event"] = json.loads(data.content)
+        except json.JSONDecodeError:
+            body_dict["event"] = {"content": data.content}
+    else:
+        logger.warning(
+            f"[Feishu WS] Unrecognized event payload (no raw_body / event): {type(data)}"
+        )
+        return None
+
+    return body_dict
+
+
 class FeishuWSManager:
     """Manages Feishu WebSocket clients for all agents."""
 
     def __init__(self):
-        self._clients: Dict[uuid.UUID, ws.Client] = {}
-        # Tasks for reconnection or ping loops if we want to cancel them later
-        self._tasks: Dict[uuid.UUID, asyncio.Task] = {}
+        self._clients: dict[uuid.UUID, ws.Client] = {}
+        self._tasks: dict[uuid.UUID, asyncio.Task] = {}
+        # Lark invokes handle_message on a background thread; dispatch via this loop.
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+
+    def _ensure_main_loop(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._main_loop is None:
+            self._main_loop = loop
+            logger.info("[Feishu WS] Bound main asyncio loop for cross-thread dispatch")
 
     def _create_event_handler(self, agent_id: uuid.UUID) -> lark.EventDispatcherHandler:
         """Create an event dispatcher for a specific agent."""
 
         def handle_message(data: Any) -> None:
-            """Handle im.message.receive_v1 events from Feishu WebSocket."""
-            try:
-                # The data object carries the raw event body
-                raw_body = getattr(data, "raw_body", None)
-                logger.info(f"[Feishu WS] Received event: {data}")
-                if not raw_body:
-                    # Some SDK versions pass the dict directly
-                    if isinstance(data, dict):
-                        body_dict = data
-                    else:
-                        # Handle lark_oapi.event.custom.CustomizedEvent
-                        body_dict = {}
-                        if hasattr(data, "header"):
-                            header_obj = data.header
-                            body_dict["header"] = vars(header_obj) if hasattr(header_obj, "__dict__") else {
-                                "event_type": getattr(header_obj, "event_type", "im.message.receive_v1"),
-                                "event_id": getattr(header_obj, "event_id", ""),
-                                "create_time": getattr(header_obj, "create_time", "")
-                            }
-                            # Ensure event_type is present as it's required downstream
-                            if "event_type" not in body_dict["header"]:
-                                body_dict["header"]["event_type"] = getattr(header_obj, "event_type", "im.message.receive_v1")
-                        else:
-                            body_dict["header"] = {"event_type": "im.message.receive_v1"}
+            """Handle im.message.receive_v1 events from Feishu WebSocket (may run off the main thread)."""
+            body_dict = _lark_ws_payload_to_body_dict(data)
+            if not body_dict:
+                return
 
-                        if hasattr(data, "event"):
-                            body_dict["event"] = data.event
-                        elif hasattr(data, "content") and isinstance(getattr(data, "content"), str):
-                            import json
-                            try:
-                                body_dict["event"] = json.loads(data.content)
-                            except json.JSONDecodeError:
-                                body_dict["event"] = {"content": data.content}
-                        
-                        if not hasattr(data, "header") and not hasattr(data, "event"):
-                            logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
-                            return
-                else:
-                    body_dict = json.loads(raw_body.decode("utf-8"))
+            logger.info(
+                f"[Feishu WS] Received WS event for agent {agent_id}: "
+                f"type={body_dict.get('header', {}).get('event_type', 'N/A')}"
+            )
 
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._async_handle_message(agent_id, data))
-            except RuntimeError:
+            loop = self._main_loop
+            if loop is None or not loop.is_running():
+                logger.error(
+                    "[Feishu WS] Main event loop not ready; cannot dispatch Feishu event. "
+                    "Ensure start_client/start_all ran on the FastAPI loop."
+                )
+                return
+
+            def _log_future(fut: asyncio.Future) -> None:
                 try:
-                    # If no running loop in this thread, try to find the main event loop
-                    # This is a heuristic and might need adjustment depending on the exact async framework setup
-                    main_loop = [t for t in asyncio.all_tasks() if t.get_name() != "feishu-ws"][0].get_loop()
-                    asyncio.run_coroutine_threadsafe(self._async_handle_message(agent_id, data), main_loop)
-                except Exception as e:
-                    logger.exception(f"[Feishu WS] Could not dispatch event to main loop: {e}")
+                    fut.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception(f"[Feishu WS] process_feishu_event failed for agent {agent_id}")
+
+            fut = asyncio.run_coroutine_threadsafe(
+                self._async_handle_message(agent_id, body_dict), loop
+            )
+            fut.add_done_callback(_log_future)
 
         dispatcher = (
             lark.EventDispatcherHandler.builder("", "")
@@ -99,49 +150,12 @@ class FeishuWSManager:
         )
         return dispatcher
 
-    async def _async_handle_message(self, agent_id: uuid.UUID, data: Dict[str, Any]) -> None:
-        """Handle im.message.receive_v1 events from Feishu WebSocket asynchronously."""
+    async def _async_handle_message(self, agent_id: uuid.UUID, body_dict: dict) -> None:
+        """Run DB-backed Feishu handler on the main loop (called via run_coroutine_threadsafe)."""
         try:
-            # The data object carries the raw event body
-            raw_body = getattr(data, "raw_body", None)
-            if not raw_body:
-                # Some SDK versions pass the dict directly
-                if isinstance(data, dict):
-                    body_dict = data
-                else:
-                    # Handle lark_oapi.event.custom.CustomizedEvent
-                    body_dict = {}
-                    if hasattr(data, "header"):
-                        header_obj = data.header
-                        body_dict["header"] = vars(header_obj) if hasattr(header_obj, "__dict__") else {
-                            "event_type": getattr(header_obj, "event_type", "im.message.receive_v1"),
-                            "event_id": getattr(header_obj, "event_id", ""),
-                            "create_time": getattr(header_obj, "create_time", "")
-                        }
-                        if "event_type" not in body_dict["header"]:
-                            body_dict["header"]["event_type"] = getattr(header_obj, "event_type", "im.message.receive_v1")
-                    else:
-                        body_dict["header"] = {"event_type": "im.message.receive_v1"}
-
-                    if hasattr(data, "event"):
-                        body_dict["event"] = data.event
-                    elif hasattr(data, "content") and isinstance(getattr(data, "content"), str):
-                        import json
-                        try:
-                            body_dict["event"] = json.loads(data.content)
-                        except json.JSONDecodeError:
-                            body_dict["event"] = {"content": data.content}
-                    
-                    if not hasattr(data, "header") and not hasattr(data, "event"):
-                        logger.warning(f"[Feishu WS] Unexpected event data type with no recognizable fields: {type(data)}")
-                        return
-            else:
-                body_dict = json.loads(raw_body.decode("utf-8"))
-
             event_type = body_dict.get("header", {}).get("event_type", "unknown")
-            logger.info(f"[Feishu WS] Event received for agent {agent_id}: {event_type}")
+            logger.info(f"[Feishu WS] Dispatching event for agent {agent_id}: {event_type}")
 
-            # Import here to avoid circular dependencies
             from app.api.feishu import process_feishu_event
 
             async with async_session() as db:
@@ -157,7 +171,9 @@ class FeishuWSManager:
         app_secret: str,
         stop_existing: bool = True,
     ):
-        """Spawns a WebSocket client fully asynchronously inside FastAPI's loop."""
+        """Spawns a Feishu WebSocket client on the current asyncio loop."""
+        self._ensure_main_loop()
+
         if not _HAS_LARK:
             logger.warning("[Feishu WS] lark-oapi not installed, cannot start client")
             return
@@ -167,7 +183,6 @@ class FeishuWSManager:
 
         logger.info(f"[Feishu WS] Starting async WS client for agent {agent_id} (App ID: {app_id})")
 
-        # Stop existing client task if any
         if stop_existing and agent_id in self._tasks:
             old_task = self._tasks.pop(agent_id, None)
             if old_task and not old_task.done():
@@ -180,7 +195,6 @@ class FeishuWSManager:
             logger.exception(f"[Feishu WS] Failed to create event handler for {agent_id}: {e}")
             return
 
-        # Instantiate Client
         client = ws.Client(
             app_id,
             app_secret,
@@ -189,20 +203,16 @@ class FeishuWSManager:
         )
         self._clients[agent_id] = client
 
-        # Direct Async runner bypassing the faulty client.start()
         async def _run_async_client():
             try:
-                # Internally _connect() opens socket and drops _receive_message_loop() onto the global loop
                 await client._connect()
-                # Start ping loop natively
-                ping_task = asyncio.create_task(client._ping_loop())
-                
-                # Keep this task alive so it doesn't get canceled, and handle reconnections
+                asyncio.create_task(client._ping_loop())
                 while True:
-                    await asyncio.sleep(3600)  # Keep-alive
+                    await asyncio.sleep(3600)
             except asyncio.CancelledError:
                 logger.info(f"[Feishu WS] Async client task cancelled for {agent_id}")
                 await client._disconnect()
+                raise
             except Exception as e:
                 logger.exception(f"[Feishu WS] Async client exception for {agent_id}: {e}")
                 await client._disconnect()
@@ -215,10 +225,10 @@ class FeishuWSManager:
     async def stop_client(self, agent_id: uuid.UUID):
         """Stops an actively running WebSocket client for an agent."""
         if agent_id in self._tasks:
-            task = self._tasks.pop(agent_id)
-            if not task.done():
+            task = self._tasks.pop(agent_id, None)
+            if task and not task.done():
                 task.cancel()
-                logger.info(f"[Feishu WS] Stopped client task for agent {agent_id}")
+                logger.info(f"[Feishu WS] Stopped client task for {agent_id}")
         if agent_id in self._clients:
             client = self._clients.pop(agent_id)
             try:
@@ -228,6 +238,8 @@ class FeishuWSManager:
 
     async def start_all(self):
         """Start WS clients for all configured Feishu agents."""
+        self._ensure_main_loop()
+
         if not _HAS_LARK:
             logger.info("[Feishu WS] lark-oapi not installed, skipping Feishu WS initialization")
             return
@@ -235,7 +247,7 @@ class FeishuWSManager:
         async with async_session() as db:
             result = await db.execute(
                 select(ChannelConfig).where(
-                    ChannelConfig.is_configured == True,
+                    ChannelConfig.is_configured.is_(True),
                     ChannelConfig.channel_type == "feishu",
                 )
             )
@@ -243,7 +255,7 @@ class FeishuWSManager:
 
         for config in configs:
             extra = config.extra_config or {}
-            mode = extra.get("connection_mode", "webhook")
+            mode = str(extra.get("connection_mode") or "webhook").strip().lower()
             if mode == "websocket":
                 if config.app_id and config.app_secret:
                     await self.start_client(
@@ -254,10 +266,7 @@ class FeishuWSManager:
 
     def status(self) -> dict:
         """Return status of all active WS tasks."""
-        return {
-            str(aid): not self._tasks[aid].done()
-            for aid in self._tasks
-        }
+        return {str(aid): not self._tasks[aid].done() for aid in self._tasks}
 
 
 feishu_ws_manager = FeishuWSManager()
