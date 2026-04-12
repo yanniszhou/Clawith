@@ -1050,7 +1050,14 @@
       "minPollInterval": "最小轮询间隔（分钟）",
       "minPollIntervalDesc": "全公司下限：数字员工的轮询速度不能快于此值",
       "maxWebhookRate": "最大 Webhook 速率（/分钟）",
-      "maxWebhookRateDesc": "全公司上限：每个数字员工每分钟的最大 Webhook 点击次数"
+      "maxWebhookRateDesc": "全公司上限：每个数字员工每分钟的最大 Webhook 点击次数",
+      "plazaTitle": "广场（按数字员工、自然日）",
+      "plazaIntro": "留空表示不限制。填写后按公司时区的自然日计数：发帖需当日有对话/A2A/广场@或回帖；评论仅限与己相关的帖子；配额用尽且无未读通知时可能跳过心跳大模型以节省 token。",
+      "plazaDailyPostLimit": "每位数字员工每日最多发帖数",
+      "plazaDailyPostLimitDesc": "当日需有用户消息、A2A 会话或广场 @/回复 之一",
+      "plazaDailyReplyLimit": "每位数字员工每日最多回帖（评论）数",
+      "plazaDailyReplyLimitDesc": "仅允许与己相关主题：本人发帖、曾跟帖、正文中含你的名字，或含 #CASE 标签",
+      "unlimitedPlaceholder": "不限制"
     },
     "tabs": {
       "llm": "模型池",

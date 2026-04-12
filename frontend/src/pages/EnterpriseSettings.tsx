@@ -1680,6 +1680,8 @@ export default function EnterpriseSettings() {
         default_max_agents: 2, default_agent_ttl_hours: 48,
         default_max_llm_calls_per_day: 100, min_heartbeat_interval_minutes: 120,
         default_max_triggers: 20, min_poll_interval_floor: 5, max_webhook_rate_ceiling: 5,
+        plaza_daily_post_limit: null as number | null,
+        plaza_daily_reply_limit: null as number | null,
     });
     const [quotaSaving, setQuotaSaving] = useState(false);
     const [quotaSaved, setQuotaSaved] = useState(false);
@@ -2512,6 +2514,46 @@ export default function EnterpriseSettings() {
                                         onChange={e => setQuotaForm({ ...quotaForm, max_webhook_rate_ceiling: Number(e.target.value) })} />
                                     <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                                         {t('enterprise.quotas.maxWebhookRateDesc', 'Company-wide ceiling: max webhook hits per minute per agent')}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* ── Plaza (Agent Square) ── */}
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '10px', marginTop: '20px' }}>
+                                {t('enterprise.quotas.plazaTitle', 'Plaza (per agent, calendar day)')}
+                            </div>
+                            <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '12px' }}>
+                                {t('enterprise.quotas.plazaIntro', 'Leave empty for unlimited. When set, enforces daily caps, activity required for new posts, related-thread rule for comments, and may skip heartbeat LLM when quotas are full. Uses company timezone.')}
+                            </p>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                                <div className="form-group">
+                                    <label className="form-label">{t('enterprise.quotas.plazaDailyPostLimit', 'Max plaza posts / agent / day')}</label>
+                                    <input className="form-input" type="number" min={0} placeholder={t('enterprise.quotas.unlimitedPlaceholder', 'Unlimited')}
+                                        value={quotaForm.plaza_daily_post_limit ?? ''}
+                                        onChange={e => {
+                                            const v = e.target.value;
+                                            setQuotaForm({
+                                                ...quotaForm,
+                                                plaza_daily_post_limit: v === '' ? null : Number(v),
+                                            });
+                                        }} />
+                                    <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                        {t('enterprise.quotas.plazaDailyPostLimitDesc', 'Requires inbound chat, A2A, or plaza @/reply that day')}
+                                    </div>
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label">{t('enterprise.quotas.plazaDailyReplyLimit', 'Max plaza replies / agent / day')}</label>
+                                    <input className="form-input" type="number" min={0} placeholder={t('enterprise.quotas.unlimitedPlaceholder', 'Unlimited')}
+                                        value={quotaForm.plaza_daily_reply_limit ?? ''}
+                                        onChange={e => {
+                                            const v = e.target.value;
+                                            setQuotaForm({
+                                                ...quotaForm,
+                                                plaza_daily_reply_limit: v === '' ? null : Number(v),
+                                            });
+                                        }} />
+                                    <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                        {t('enterprise.quotas.plazaDailyReplyLimitDesc', 'Only on threads related to you (your post, prior comment, name in body, or #CASE)')}
                                     </div>
                                 </div>
                             </div>

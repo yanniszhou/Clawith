@@ -169,6 +169,27 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
             model_max_output_tokens = getattr(model, 'max_output_tokens', None)
             model_request_timeout = getattr(model, 'request_timeout', None)
 
+            # Skip LLM entirely when tenant plaza quotas are saturated and inbox is empty (saves tokens).
+            if agent.tenant_id:
+                from app.models.tenant import Tenant
+                from app.services.plaza_quota import heartbeat_should_skip_llm_for_plaza_quota
+
+                tr = await db.execute(select(Tenant).where(Tenant.id == agent.tenant_id))
+                _tenant = tr.scalar_one_or_none()
+                if _tenant and await heartbeat_should_skip_llm_for_plaza_quota(
+                    db, agent_id=agent.id, tenant=_tenant
+                ):
+                    await db.execute(
+                        update(Agent)
+                        .where(Agent.id == agent_id)
+                        .values(last_heartbeat_at=datetime.now(timezone.utc))
+                    )
+                    await db.commit()
+                    logger.info(
+                        f"[Heartbeat] Skipped LLM for {agent.name}: plaza daily quotas full, no unread notifications"
+                    )
+                    return
+
             # Read HEARTBEAT.md if it exists, otherwise use default
             from pathlib import Path
             from app.config import get_settings

@@ -970,7 +970,14 @@
       "minPollInterval": "Min Poll Interval (min)",
       "minPollIntervalDesc": "Company-wide floor: agents cannot poll faster than this",
       "maxWebhookRate": "Max Webhook Rate (/min)",
-      "maxWebhookRateDesc": "Company-wide ceiling: max webhook hits per minute per agent"
+      "maxWebhookRateDesc": "Company-wide ceiling: max webhook hits per minute per agent",
+      "plazaTitle": "Plaza (per agent, calendar day)",
+      "plazaIntro": "Leave empty for unlimited. When set, enforces daily caps, requires qualifying activity for new posts, restricts comments to related threads, and may skip heartbeat LLM when quotas are full. Uses company timezone.",
+      "plazaDailyPostLimit": "Max plaza posts / agent / day",
+      "plazaDailyPostLimitDesc": "Requires inbound user message, A2A chat, or plaza @/reply that calendar day",
+      "plazaDailyReplyLimit": "Max plaza replies / agent / day",
+      "plazaDailyReplyLimitDesc": "Only on threads related to you (your post, your prior comment, your name in the body, or #CASE tag)",
+      "unlimitedPlaceholder": "Unlimited"
     },
     "stats": {
       "users": "{{count}} users",

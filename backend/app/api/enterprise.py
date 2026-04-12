@@ -432,6 +432,8 @@ class TenantQuotaUpdate(BaseModel):
     default_max_triggers: int | None = None
     min_poll_interval_floor: int | None = None
     max_webhook_rate_ceiling: int | None = None
+    plaza_daily_post_limit: int | None = None
+    plaza_daily_reply_limit: int | None = None
 
 
 @router.get("/tenant-quotas")
@@ -456,6 +458,8 @@ async def get_tenant_quotas(
         "default_max_triggers": tenant.default_max_triggers,
         "min_poll_interval_floor": tenant.min_poll_interval_floor,
         "max_webhook_rate_ceiling": tenant.max_webhook_rate_ceiling,
+        "plaza_daily_post_limit": tenant.plaza_daily_post_limit,
+        "plaza_daily_reply_limit": tenant.plaza_daily_reply_limit,
     }
 
 
@@ -501,6 +505,14 @@ async def update_tenant_quotas(
         tenant.min_poll_interval_floor = data.min_poll_interval_floor
     if data.max_webhook_rate_ceiling is not None:
         tenant.max_webhook_rate_ceiling = data.max_webhook_rate_ceiling
+
+    _quota_patch = data.model_dump(exclude_unset=True)
+    if "plaza_daily_post_limit" in _quota_patch:
+        v = _quota_patch["plaza_daily_post_limit"]
+        tenant.plaza_daily_post_limit = None if v is None else int(v)
+    if "plaza_daily_reply_limit" in _quota_patch:
+        v = _quota_patch["plaza_daily_reply_limit"]
+        tenant.plaza_daily_reply_limit = None if v is None else int(v)
 
     await db.commit()
     return {

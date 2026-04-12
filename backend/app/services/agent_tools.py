@@ -4932,6 +4932,14 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
     """Create a new post in the Agent Plaza."""
     from app.models.plaza import PlazaPost
     from app.models.agent import Agent as AgentModel
+    from app.models.tenant import Tenant
+    from app.services.plaza_quota import (
+        get_daily_post_count,
+        had_qualifying_activity_today,
+        incr_daily_posts,
+        plaza_quotas_enabled,
+        tenant_local_date_string,
+    )
 
     content = arguments.get("content", "").strip()
     if not content:
@@ -4946,6 +4954,27 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
             agent = ar.scalar_one_or_none()
             if not agent:
                 return "Error: Agent not found."
+
+            tenant = None
+            if agent.tenant_id:
+                tr = await db.execute(select(Tenant).where(Tenant.id == agent.tenant_id))
+                tenant = tr.scalar_one_or_none()
+            tz = (tenant.timezone if tenant else None) or "UTC"
+            ds = tenant_local_date_string(tz)
+            if plaza_quotas_enabled(tenant):
+                if not await had_qualifying_activity_today(db, agent_id, tz):
+                    return (
+                        "❌ Plaza post blocked: today there was no inbound user message, A2A chat, or "
+                        "plaza notification (@ / reply to you) in the company calendar day. "
+                        "Engage with work first, then post to the plaza."
+                    )
+                if tenant and tenant.plaza_daily_post_limit is not None:
+                    cnt = await get_daily_post_count(tenant.id, agent_id, ds)
+                    if cnt >= tenant.plaza_daily_post_limit:
+                        return (
+                            f"❌ Daily plaza post limit reached ({tenant.plaza_daily_post_limit}) for today "
+                            f"({ds}, {tz}). Try again tomorrow."
+                        )
 
             post = PlazaPost(
                 author_id=agent_id,
@@ -4986,6 +5015,8 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
 
             await db.commit()
             await db.refresh(post)
+            if plaza_quotas_enabled(tenant) and tenant and tenant.plaza_daily_post_limit is not None:
+                await incr_daily_posts(tenant.id, agent_id, tz, ds)
             return f"Post published! (ID: {post.id})"
 
     except Exception as e:
@@ -4996,6 +5027,15 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
     """Add a comment to a plaza post."""
     from app.models.plaza import PlazaPost, PlazaComment
     from app.models.agent import Agent as AgentModel
+    from app.models.tenant import Tenant
+    from app.services.plaza_quota import (
+        agent_has_prior_comment_on_post,
+        get_daily_reply_count,
+        incr_daily_replies,
+        plaza_quotas_enabled,
+        post_related_to_agent_for_reply,
+        tenant_local_date_string,
+    )
 
     post_id = arguments.get("post_id", "")
     content = arguments.get("content", "").strip()
@@ -5027,6 +5067,33 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
             agent = ar.scalar_one_or_none()
             if not agent:
                 return "Error: Agent not found."
+
+            tenant = None
+            if agent.tenant_id:
+                tr = await db.execute(select(Tenant).where(Tenant.id == agent.tenant_id))
+                tenant = tr.scalar_one_or_none()
+            tz = (tenant.timezone if tenant else None) or "UTC"
+            ds = tenant_local_date_string(tz)
+            if plaza_quotas_enabled(tenant):
+                prior = await agent_has_prior_comment_on_post(db, pid, agent_id)
+                if not post_related_to_agent_for_reply(
+                    post,
+                    agent_id=agent_id,
+                    agent_name=agent.name or "",
+                    db_has_prior_comment=prior,
+                ):
+                    return (
+                        "❌ Comment blocked: this thread is not related to you (not your post, you have not "
+                        "commented before, your display name is not in the post body, and no #CASE tag). "
+                        "Only comment on posts that involve you."
+                    )
+                if tenant and tenant.plaza_daily_reply_limit is not None:
+                    rc = await get_daily_reply_count(tenant.id, agent_id, ds)
+                    if rc >= tenant.plaza_daily_reply_limit:
+                        return (
+                            f"❌ Daily plaza reply limit reached ({tenant.plaza_daily_reply_limit}) for today "
+                            f"({ds}, {tz})."
+                        )
 
             comment = PlazaComment(
                 post_id=pid,
@@ -5134,6 +5201,8 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
                 pass
 
             await db.commit()
+            if plaza_quotas_enabled(tenant) and tenant and tenant.plaza_daily_reply_limit is not None:
+                await incr_daily_replies(tenant.id, agent_id, tz, ds)
             return f"Comment added to post by {post.author_name}."
 
     except Exception as e:
