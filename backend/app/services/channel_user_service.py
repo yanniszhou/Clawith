@@ -400,8 +400,8 @@ async def get_platform_user_by_org_member(
     else:
         username = f"{channel_type}_{org_member.id.hex[:12]}"
 
-    # Ensure unique username within tenant
-    from app.models.user import User, Identity
+    # Import Identity only; importing User here would shadow module-level User and break Case 1.
+    from app.models.user import Identity
     query = (
         select(User)
         .join(User.identity)

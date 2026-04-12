@@ -5,9 +5,10 @@ Used by feishu.py, slack.py, discord_bot.py, wecom.py, teams.py — eliminates i
 import uuid as _uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit import ChatMessage
 from app.models.chat_session import ChatSession
 
 
@@ -65,3 +66,38 @@ async def find_or_create_channel_session(
             session.title = group_name[:40]
 
     return session
+
+
+async def pick_best_feishu_p2p_session_by_message_count(
+    db: AsyncSession,
+    agent_id: _uuid.UUID,
+    candidates: list[ChatSession],
+) -> ChatSession:
+    """Pick the Feishu P2P ChatSession that should own the thread (user_id vs open_id duplicates).
+
+    Prefer the row with more chat_messages so proactive outbound lands in the same session
+    the user already chats in, not an empty duplicate keyed only by tenant user_id.
+    """
+    if not candidates:
+        raise ValueError("pick_best_feishu_p2p_session_by_message_count: empty candidates")
+    if len(candidates) == 1:
+        return candidates[0]
+    best = candidates[0]
+    best_n = -1
+    for s in candidates:
+        r = await db.execute(
+            select(func.count(ChatMessage.id)).where(
+                ChatMessage.agent_id == agent_id,
+                ChatMessage.conversation_id == str(s.id),
+            )
+        )
+        n = r.scalar() or 0
+        if n > best_n:
+            best_n = n
+            best = s
+        elif n == best_n:
+            s_lm = s.last_message_at or s.created_at
+            b_lm = best.last_message_at or best.created_at
+            if s_lm and b_lm and s_lm > b_lm:
+                best = s
+    return best

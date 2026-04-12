@@ -497,40 +497,12 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 user_text, re.IGNORECASE
             )
 
-            # Determine conversation_id for history isolation
-            # Group chats: use chat_id; P2P chats: prefer user_id (tenant-stable)
+            # Group: conv_id fixed. P2P: conv_id must use contact API–resolved tenant user_id when
+            # the event body omits sender.user_id; otherwise inbound session key != outbound persist key.
             if chat_type == "group" and chat_id:
                 conv_id = f"feishu_group_{chat_id}"
             else:
-                conv_id = f"feishu_p2p_{sender_user_id_from_event or sender_open_id}"
-
-            # Load recent conversation history via session (session UUID may already exist)
-            from app.models.audit import ChatMessage
-            from app.models.agent import Agent as AgentModel
-            from app.services.channel_session import find_or_create_channel_session
-            agent_r = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
-            agent_obj = agent_r.scalar_one_or_none()
-            creator_id = agent_obj.creator_id if agent_obj else agent_id
-            from app.models.agent import DEFAULT_CONTEXT_WINDOW_SIZE
-            ctx_size = (agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE) if agent_obj else DEFAULT_CONTEXT_WINDOW_SIZE
-
-            # Pre-resolve session so history lookup uses the UUID  (session created later if new)
-            _pre_sess_r = await db.execute(
-                select(__import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession).where(
-                    __import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession.agent_id == agent_id,
-                    __import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession.external_conv_id == conv_id,
-                )
-            )
-            _pre_sess = _pre_sess_r.scalar_one_or_none()
-            _history_conv_id = str(_pre_sess.id) if _pre_sess else conv_id
-            history_result = await db.execute(
-                select(ChatMessage)
-                .where(ChatMessage.agent_id == agent_id, ChatMessage.conversation_id == _history_conv_id)
-                .order_by(ChatMessage.created_at.desc())
-                .limit(ctx_size)
-            )
-            history_msgs = history_result.scalars().all()
-            history = [{"role": m.role, "content": m.content} for m in reversed(history_msgs)]
+                conv_id = None  # P2P — set below after Feishu contact API
 
             # --- Resolve Feishu sender identity & find/create platform user ---
             import uuid as _uuid
@@ -618,6 +590,69 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                                     logger.error(f"[Feishu] Cache write failed: {_ce}")
             except Exception as e:
                 logger.error(f"[Feishu] Failed to resolve sender: {e}")
+
+            from app.models.audit import ChatMessage
+            from app.models.agent import Agent as AgentModel
+            from app.models.chat_session import ChatSession
+            from app.services.channel_session import (
+                find_or_create_channel_session,
+                pick_best_feishu_p2p_session_by_message_count,
+            )
+
+            agent_r = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
+            agent_obj = agent_r.scalar_one_or_none()
+            creator_id = agent_obj.creator_id if agent_obj else agent_id
+            from app.models.agent import DEFAULT_CONTEXT_WINDOW_SIZE
+            ctx_size = (agent_obj.context_window_size or DEFAULT_CONTEXT_WINDOW_SIZE) if agent_obj else DEFAULT_CONTEXT_WINDOW_SIZE
+
+            if chat_type != "group":
+                _uid = (sender_user_id_feishu or "").strip()
+                _oid = (sender_open_id or "").strip()
+                if not _uid and not _oid:
+                    return {"code": 0, "msg": "missing Feishu sender identity"}
+                _p2p_keys: list[str] = []
+                if _uid:
+                    _p2p_keys.append(f"feishu_p2p_{_uid}")
+                if _oid:
+                    _ko = f"feishu_p2p_{_oid}"
+                    if _ko not in _p2p_keys:
+                        _p2p_keys.append(_ko)
+                _prefer_conv = f"feishu_p2p_{_uid or _oid}"
+                _existing_p2p = await db.execute(
+                    select(ChatSession).where(
+                        ChatSession.agent_id == agent_id,
+                        ChatSession.source_channel == "feishu",
+                        ChatSession.is_group == False,
+                        ChatSession.external_conv_id.in_(_p2p_keys),
+                    )
+                )
+                _p2p_sessions = _existing_p2p.scalars().all()
+                if _p2p_sessions:
+                    # Do not prefer _prefer_conv if that row is empty while open_id row has history
+                    _chosen = await pick_best_feishu_p2p_session_by_message_count(
+                        db, agent_id, list(_p2p_sessions)
+                    )
+                    conv_id = _chosen.external_conv_id
+                else:
+                    conv_id = _prefer_conv
+
+            # Pre-resolve session and load history (canonical conv_id for P2P)
+            _pre_sess_r = await db.execute(
+                select(ChatSession).where(
+                    ChatSession.agent_id == agent_id,
+                    ChatSession.external_conv_id == conv_id,
+                )
+            )
+            _pre_sess = _pre_sess_r.scalar_one_or_none()
+            _history_conv_id = str(_pre_sess.id) if _pre_sess else conv_id
+            history_result = await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.agent_id == agent_id, ChatMessage.conversation_id == _history_conv_id)
+                .order_by(ChatMessage.created_at.desc())
+                .limit(ctx_size)
+            )
+            history_msgs = history_result.scalars().all()
+            history = [{"role": m.role, "content": m.content} for m in reversed(history_msgs)]
 
             # Resolve channel user via unified service (uses OrgMember + SSO patterns)
             from app.services.channel_user_service import channel_user_service

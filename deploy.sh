@@ -33,7 +33,6 @@ DRY_RUN=false
 NO_RESTART=false
 RESTART_ONLY=false
 SYNC_ENV=false
-RSYNC_EXTRA=()
 
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
@@ -51,7 +50,7 @@ Clawith deploy — rsync to remote and run ./restart.sh --source
   ./deploy.sh root@x [/remote/path]   # 参数覆盖（优先于默认，次于 DEPLOY_* 环境变量）
 
 Options:
-  --dry-run       rsync dry run only
+  --dry-run       rsync -n (dry run only, no file changes on remote)
   --no-restart    sync only, no SSH restart
   --restart-only  restart only, no rsync
   --sync-env      include .env (default: excluded)
@@ -71,10 +70,6 @@ REMOTE_PATH="${DEPLOY_PATH:-${POSITIONAL[1]:-$DEFAULT_DEPLOY_PATH}}"
 
 # 去掉末尾斜杠，统一成 REMOTE_PATH 无尾斜杠
 REMOTE_PATH="${REMOTE_PATH%/}"
-
-if [[ "$DRY_RUN" == true ]]; then
-  RSYNC_EXTRA+=(-n)
-fi
 
 EXCLUDES=(
   --exclude '.git'
@@ -100,7 +95,11 @@ REMOTE_TARGET="${HOST}:${REMOTE_PATH}/"
 
 if [[ "$RESTART_ONLY" != true ]]; then
   echo -e "${CYAN}▶ rsync → ${REMOTE_TARGET}${NC}"
-  rsync -avz "${RSYNC_EXTRA[@]}" "${EXCLUDES[@]}" ./ "$REMOTE_TARGET"
+  if [[ "$DRY_RUN" == true ]]; then
+    rsync -avz -n "${EXCLUDES[@]}" ./ "$REMOTE_TARGET"
+  else
+    rsync -avz "${EXCLUDES[@]}" ./ "$REMOTE_TARGET"
+  fi
   echo -e "${GREEN}✓ 同步完成${NC}"
 else
   echo -e "${YELLOW}▶ 跳过 rsync（--restart-only）${NC}"
@@ -115,4 +114,4 @@ echo -e "${CYAN}▶ 远程重启: ${HOST} ${REMOTE_PATH}/restart.sh --source${NC
 ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$REMOTE_PATH") && ./restart.sh --source"
 
 echo -e "${GREEN}✓ 部署完成${NC}"
-echo -e "  前端代理: ${CYAN}http://${HOST#*@}/3008${NC}  后端: ${CYAN}http://${HOST#*@}/8008${NC}"
+echo -e "  前端代理: ${CYAN}http://${HOST#*@}:3008${NC}  后端: ${CYAN}http://${HOST#*@}:8008${NC}"

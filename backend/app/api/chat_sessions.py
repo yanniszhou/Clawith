@@ -62,6 +62,44 @@ class PatchSessionIn(BaseModel):
     title: str
 
 
+def _dedupe_feishu_p2p_sessions_for_admin_list(rows: list[SessionOut]) -> list[SessionOut]:
+    """Collapse duplicate Feishu P2P rows (same platform user, feishu_p2p_user_id vs feishu_p2p_open_id).
+
+    Outbound persistence already picks the session with more messages; the admin list still
+    returned every ChatSession row, so「其他用户」could open the empty duplicate and miss
+    proactive assistant messages.
+    """
+    feishu_by_user: dict[str, list[SessionOut]] = {}
+    rest: list[SessionOut] = []
+    for s in rows:
+        human_feishu_p2p = (
+            not s.is_group
+            and s.participant_type == "user"
+            and s.source_channel == "feishu"
+        )
+        if human_feishu_p2p:
+            feishu_by_user.setdefault(s.user_id, []).append(s)
+        else:
+            rest.append(s)
+    merged: list[SessionOut] = []
+    for group in feishu_by_user.values():
+        if len(group) == 1:
+            merged.append(group[0])
+        else:
+            merged.append(
+                max(
+                    group,
+                    key=lambda x: (x.message_count, x.last_message_at or "", x.created_at or ""),
+                )
+            )
+    combined = rest + merged
+    combined.sort(
+        key=lambda x: (x.last_message_at or "", x.created_at or ""),
+        reverse=True,
+    )
+    return combined
+
+
 @router.get("/{agent_id}/sessions")
 async def list_sessions(
     agent_id: uuid.UUID,
@@ -149,7 +187,7 @@ async def list_sessions(
                 is_group=session.is_group,
                 group_name=session.group_name,
             ))
-        return out
+        return _dedupe_feishu_p2p_sessions_for_admin_list(out)
 
     else:  # scope == "mine"
         result = await db.execute(
