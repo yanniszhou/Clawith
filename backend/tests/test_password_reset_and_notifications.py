@@ -212,7 +212,25 @@ async def test_forgot_password_queues_background_email(monkeypatch):
     assert len(background_tasks.tasks) == 1
 
 
+@pytest.mark.asyncio
+async def test_forgot_password_503_when_token_creation_fails(monkeypatch):
+    user = make_user()
+    db = RecordingDB([DummyResult(user)])
+    background_tasks = BackgroundTasks()
 
+    async def boom(*_args, **_kwargs):
+        raise OSError(61, "Connection refused")
+
+    monkeypatch.setattr(password_reset_service, "create_password_reset_token", boom)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api.forgot_password(
+            ForgotPasswordRequest(email=user.email),
+            background_tasks,
+            db,
+        )
+    assert exc_info.value.status_code == 503
+    assert "Redis" in exc_info.value.detail
 
 
 def test_send_system_email_uses_configured_timeout(monkeypatch):

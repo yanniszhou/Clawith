@@ -14,7 +14,7 @@ export default function ForgotPassword() {
     const [hintResult, setHintResult] = useState('');
 
     useEffect(() => {
-        document.documentElement.setAttribute('data-theme', 'dark');
+        document.documentElement.setAttribute('data-theme', 'light');
     }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {

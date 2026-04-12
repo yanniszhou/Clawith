@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://clawith:clawith@localhost:5432/clawith"
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://172.16.19.56:6379/0"
 
     # JWT
     JWT_SECRET_KEY: str = "change-me-jwt-secret"

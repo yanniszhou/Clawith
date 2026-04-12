@@ -5,10 +5,10 @@
   },
   "login": {
     "hero": {
-      "badge": "Multi-Agent Collaboration",
       "title": "iDataMate",
-      "subtitle": "OpenClaw for Teams",
-      "description": "OpenClaw empowers individuals.<br>iDataMate scales it to frontier organizations.",
+      "subtitle": "Multi-agent collaboration platform",
+      "attribution": "© 2026 Data Space Research Institute, Hefei Comprehensive National Science Center. All rights reserved.",
+      "description": "Build a secure, reliable digital employee team for your organization.<br>Work gets done; personal needs get help.",
       "features": {
         "multiAgent": {
           "title": "Multi-Agent Crew",

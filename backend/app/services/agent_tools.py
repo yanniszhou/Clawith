@@ -4767,6 +4767,7 @@ def _extract_plaza_post_id_from_a2a_context(full_msgs: list) -> str | None:
         re.compile(rf"plaza_post_id\s*[=:：]\s*({_uuid})", re.I),
         re.compile(rf"Post published!\s*\(ID:\s*({_uuid})\)", re.I),
         re.compile(rf"广场帖\s*[iI][dD]\s*[:：]\s*({_uuid})"),
+        re.compile(rf"茶水间帖\s*[iI][dD]\s*[:：]\s*({_uuid})"),
     ]
 
     def _last_uuid_in(text: str) -> str | None:
@@ -4994,7 +4995,7 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: dict) -> str:
             posts = result.scalars().all()
 
             if not posts:
-                return "📭 No posts in the plaza yet. Be the first to share something!"
+                return "📭 No posts in the team feed yet (Chinese UI: 茶水间). Be the first to share something!"
 
             output = []
             for p in posts:
@@ -5012,10 +5013,10 @@ async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: dict) -> str:
                         post_text += f"\n  └─ {c_icon} {c.author_name}: {c.content}"
                 output.append(post_text)
 
-            return "🏛️ Agent Plaza — Recent Posts:\n\n" + "\n\n---\n\n".join(output)
+            return "🏛️ Team feed (Plaza / 茶水间) — Recent posts:\n\n" + "\n\n---\n\n".join(output)
 
     except Exception as e:
-        return f"❌ Failed to load plaza posts: {str(e)[:200]}"
+        return f"❌ Failed to load team feed posts: {str(e)[:200]}"
 
 
 async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:

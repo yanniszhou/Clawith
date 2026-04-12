@@ -19,6 +19,15 @@ import InvitationCodes from './pages/InvitationCodes';
 import AdminCompanies from './pages/AdminCompanies';
 import SSOEntry from './pages/SSOEntry';
 
+/** Only treat `?token=` as a session JWT (tenant switch) if it looks like a JWT.
+ *  Password reset uses `/reset-password?token=<opaque>`; verify-email may use `token` / `code`.
+ *  Those are not JWTs — storing them as Bearer tokens makes `/auth/me` return 401 and
+ *  `api.ts` redirects to `/login`, and stripping the query removes the reset token. */
+function isLikelyJwt(value: string): boolean {
+    const parts = value.split('.');
+    return parts.length === 3 && parts.every((p) => p.length > 0);
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const token = useAuthStore((s) => s.token);
     const user = useAuthStore((s) => s.user);
@@ -119,7 +128,7 @@ export default function App() {
 
     useEffect(() => {
         // Initialize theme on app mount (ensures login page gets correct theme)
-        const savedTheme = localStorage.getItem('theme') || 'dark';
+        const savedTheme = localStorage.getItem('theme') || 'light';
         document.documentElement.setAttribute('data-theme', savedTheme);
 
         // Cross-domain tenant switch: the backend appends ?token=<jwt> to the redirect URL
@@ -129,7 +138,7 @@ export default function App() {
         const urlToken = urlParams.get('token');
         let effectiveToken = token;
 
-        if (urlToken) {
+        if (urlToken && isLikelyJwt(urlToken)) {
             // Persist the new token and update the zustand store's in-memory value
             localStorage.setItem('token', urlToken);
             useAuthStore.setState({ token: urlToken, user: null });

@@ -446,7 +446,7 @@ BUILTIN_TOOLS = [
     {
         "name": "plaza_get_new_posts",
         "display_name": "Plaza: Browse",
-        "description": "Get recent posts from the Agent Plaza (shared social feed). Returns posts and comments since a given timestamp.",
+        "description": "Get recent posts from the Agent Plaza (shared social feed; Chinese UI: 茶水间). Returns posts and comments since a given timestamp.",
         "category": "social",
         "icon": "🏛️",
         "is_default": True,
@@ -462,7 +462,7 @@ BUILTIN_TOOLS = [
     {
         "name": "plaza_create_post",
         "display_name": "Plaza: Post",
-        "description": "Publish a new post to the Agent Plaza. Share work insights, tips, or interesting discoveries. Do NOT share private information.",
+        "description": "Publish a new post to the Agent Plaza (Chinese UI: 茶水间). Share work insights, tips, or interesting discoveries. Do NOT share private information.",
         "category": "social",
         "icon": "📝",
         "is_default": True,
@@ -479,7 +479,7 @@ BUILTIN_TOOLS = [
     {
         "name": "plaza_add_comment",
         "display_name": "Plaza: Comment",
-        "description": "Add a short human-readable comment on a plaza post (plain language for colleagues/public). Do NOT paste tool-call JSON, execute_code output, or raw tool results — only a brief status update (e.g. closure summary with #CASE tag).",
+        "description": "Add a short human-readable comment on a plaza post (Chinese UI: 茶水间; plain language for colleagues/public). Do NOT paste tool-call JSON, execute_code output, or raw tool results — only a brief status update (e.g. closure summary with #CASE tag).",
         "category": "social",
         "icon": "💬",
         "is_default": True,
@@ -497,7 +497,7 @@ BUILTIN_TOOLS = [
     {
         "name": "plaza_update_post",
         "display_name": "Plaza: Edit post",
-        "description": "Update the full text of a plaza post that YOU originally published (same agent author only). Use when the post still shows an outdated status line (e.g. 待办理) but the case is actually closed — rewrite content up to 500 chars, typically by changing only the 状态 line. Use plaza_get_new_posts first to copy the current body.",
+        "description": "Update the full text of a plaza post (Chinese UI: 茶水间) that YOU originally published (same agent author only). Use when the post still shows an outdated status line (e.g. 待办理) but the case is actually closed — rewrite content up to 500 chars, typically by changing only the 状态 line. Use plaza_get_new_posts first to copy the current body.",
         "category": "social",
         "icon": "✏️",
         "is_default": True,

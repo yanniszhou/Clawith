@@ -216,17 +216,11 @@ function AccountSettingsModal({ user, onClose, isChinese }: { user: any; onClose
     );
 }
 
-/* ────── Version Display (runtime) ────── */
-function VersionDisplay() {
-    const [info, setInfo] = useState<{ version?: string; commit?: string }>({});
-    useEffect(() => {
-        fetch('/api/version').then(r => r.json()).then(setInfo).catch(() => {});
-    }, []);
-    if (!info.version) return null;
+/* ────── Footer (copyright) ────── */
+function SidebarFooterCopyright() {
     return (
-        <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-quaternary)', marginTop: '8px', letterSpacing: '0.3px' }}>
-            v{info.version}
-            {info.commit && <span style={{ opacity: 0.6 }}> ({info.commit})</span>}
+        <div style={{ textAlign: 'center', fontSize: '8px', color: 'var(--text-quaternary)', marginTop: '8px', letterSpacing: '0.2px', lineHeight: 1.45 }}>
+            © 2026 数据空间研究院
         </div>
     );
 }
@@ -383,7 +377,7 @@ export default function Layout() {
 
     // Theme
     const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-        return (localStorage.getItem('theme') as 'dark' | 'light') || 'dark';
+        return (localStorage.getItem('theme') as 'dark' | 'light') || 'light';
     });
 
     useEffect(() => {
@@ -783,7 +777,7 @@ export default function Layout() {
                                 }} />
                             </div>
                         </div>
-                        <VersionDisplay />
+                        <SidebarFooterCopyright />
                     </div>
                 </div>
             </nav>

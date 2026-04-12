@@ -32,7 +32,8 @@ export default function Login() {
     });
 
     useEffect(() => {
-        document.documentElement.setAttribute('data-theme', 'dark');
+        // Auth screens always use light theme; saved theme applies after login in Layout.
+        document.documentElement.setAttribute('data-theme', 'light');
 
         // If arriving via invitation link with email, check whether the email is already registered
         // to decide whether to show login or register form.
@@ -269,40 +270,42 @@ export default function Login() {
             {/* ── Left: Branding Panel ── */}
             <div className="login-hero">
                 <div className="login-hero-bg" />
-                <div className="login-hero-content">
-                    <div className="login-hero-badge">
-                        <span className="login-hero-badge-dot" />
-                        {t('login.hero.badge')}
-                    </div>
-                    <h1 className="login-hero-title">
-                        {t('login.hero.title')}<br />
-                        <span style={{ fontSize: '0.65em', fontWeight: 600, opacity: 0.85 }}>{t('login.hero.subtitle')}</span>
-                    </h1>
-                    <p className="login-hero-desc" dangerouslySetInnerHTML={{ __html: t('login.hero.description') }} />
-                    <div className="login-hero-features">
-                        <div className="login-hero-feature">
-                            <span className="login-hero-feature-icon">🤖</span>
-                            <div>
-                                <div className="login-hero-feature-title">{t('login.hero.features.multiAgent.title')}</div>
-                                <div className="login-hero-feature-desc">{t('login.hero.features.multiAgent.description')}</div>
-                            </div>
+                <div className="login-hero-main">
+                    <div className="login-hero-content">
+                        <div className="login-hero-brand-row">
+                            <img src="/logo-white.png" alt="" className="login-hero-brand-logo" width={40} height={40} />
+                            <span className="login-hero-brand-name">{t('login.hero.title')}</span>
                         </div>
-                        <div className="login-hero-feature">
-                            <span className="login-hero-feature-icon">🧠</span>
-                            <div>
-                                <div className="login-hero-feature-title">{t('login.hero.features.persistentMemory.title')}</div>
-                                <div className="login-hero-feature-desc">{t('login.hero.features.persistentMemory.description')}</div>
+                        <h1 className="login-hero-title">{t('login.hero.subtitle')}</h1>
+                        <p className="login-hero-desc" dangerouslySetInnerHTML={{ __html: t('login.hero.description') }} />
+                        <div className="login-hero-features">
+                            <div className="login-hero-feature">
+                                <span className="login-hero-feature-icon">🤖</span>
+                                <div>
+                                    <div className="login-hero-feature-title">{t('login.hero.features.multiAgent.title')}</div>
+                                    <div className="login-hero-feature-desc">{t('login.hero.features.multiAgent.description')}</div>
+                                </div>
                             </div>
-                        </div>
-                        <div className="login-hero-feature">
-                            <span className="login-hero-feature-icon">🏛️</span>
-                            <div>
-                                <div className="login-hero-feature-title">{t('login.hero.features.agentPlaza.title')}</div>
-                                <div className="login-hero-feature-desc">{t('login.hero.features.agentPlaza.description')}</div>
+                            <div className="login-hero-feature">
+                                <span className="login-hero-feature-icon">🧠</span>
+                                <div>
+                                    <div className="login-hero-feature-title">{t('login.hero.features.persistentMemory.title')}</div>
+                                    <div className="login-hero-feature-desc">{t('login.hero.features.persistentMemory.description')}</div>
+                                </div>
+                            </div>
+                            <div className="login-hero-feature">
+                                <span className="login-hero-feature-icon">🏛️</span>
+                                <div>
+                                    <div className="login-hero-feature-title">{t('login.hero.features.agentPlaza.title')}</div>
+                                    <div className="login-hero-feature-desc">{t('login.hero.features.agentPlaza.description')}</div>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
+                <p className="login-hero-attribution" role="note">
+                    {t('login.hero.attribution')}
+                </p>
             </div>
 
             {/* ── Right: Form Panel ── */}
@@ -331,7 +334,6 @@ export default function Login() {
                     ) : (
                     <>
                     <div className="login-form-header">
-                        <div className="login-form-logo"><img src="/logo-black.png" className="login-logo-img" alt="" style={{ width: 28, height: 28, marginRight: 8, verticalAlign: 'middle' }} />iDataMate</div>
                         <h2 className="login-form-title">
                             {isRegister ? t('auth.register') : t('auth.login')}
                         </h2>

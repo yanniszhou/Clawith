@@ -1134,10 +1134,19 @@ select:focus {
   flex: 1;
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   overflow: hidden;
   min-height: 100vh;
+}
+
+.login-hero-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+  min-height: 0;
 }
 
 .login-hero-bg {
@@ -1162,9 +1171,46 @@ select:focus {
 
 .login-hero-content {
   position: relative;
-  z-index: 1;
   max-width: 520px;
   padding: 48px;
+}
+
+.login-hero-attribution {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  width: 100%;
+  padding: 0 32px 28px;
+  box-sizing: border-box;
+  font-size: 11px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.38);
+  text-align: center;
+}
+
+.login-hero-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.login-hero-brand-logo {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.35));
+}
+
+.login-hero-brand-name {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+  line-height: 1.2;
 }
 
 .login-hero-logo {
@@ -1559,6 +1605,15 @@ select:focus {
 
   .login-hero-title {
     font-size: 32px;
+  }
+
+  .login-hero-brand-name {
+    font-size: 20px;
+  }
+
+  .login-hero-attribution {
+    padding: 8px 20px 20px;
+    font-size: 10px;
   }
 
   .login-hero-features {

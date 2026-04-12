@@ -585,23 +585,43 @@ async def forgot_password(
 
     try:
         from app.services.password_reset_service import build_password_reset_url, create_password_reset_token
-        from app.services.system_email_service import (
-            send_password_reset_email,
-        )
+        from app.services.system_email_service import send_password_reset_email
 
         raw_token, expires_at = await create_password_reset_token(identity.id)
 
         reset_url = await build_password_reset_url(db, raw_token)
         expiry_minutes = int((expires_at - datetime.now(timezone.utc)).total_seconds() // 60)
-        background_tasks.add_task(
-            send_password_reset_email,
-            identity.email,
-            identity.username or "User",
-            reset_url,
-            expiry_minutes,
-        )
+
+        email_to = identity.email
+        display = identity.username or "User"
+
+        async def _deliver_reset_email() -> None:
+            try:
+                await send_password_reset_email(
+                    email_to,
+                    display,
+                    reset_url,
+                    expiry_minutes,
+                )
+            except Exception as send_exc:
+                logger.exception(
+                    "Password reset email delivery failed for {}: {}",
+                    email_to,
+                    send_exc,
+                )
+
+        background_tasks.add_task(_deliver_reset_email)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning(f"Failed to process password reset email for {data.email}: {exc}")
+        logger.warning("Password reset failed for {}: {}", data.email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Password reset could not be completed. "
+                "Ensure Redis is running (REDIS_URL, e.g. redis://localhost:6379/0) and try again."
+            ),
+        ) from exc
 
     return generic_response
 

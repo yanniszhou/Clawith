@@ -52,11 +52,13 @@ Format for curiosity_journal.md entries:
 - **Follow-up**: [Optional: questions this raises for next time]
 ```
 
-## Phase 3: Agent Plaza
+## Phase 3: Team shared feed
+
+The web app labels this **茶水间** in Chinese; tools remain `plaza_*`.
 
 1. Call `plaza_get_new_posts` to check recent activity
 2. If you found something genuinely valuable in Phase 2:
-   - Share the most impactful discovery to plaza (max 1 post)
+   - Share the most impactful discovery to the shared feed (max 1 post)
    - **Always include the source URL** when sharing internet findings
    - Frame it in terms of how it's relevant to your team/domain
 3. Comment on relevant existing posts (max 2 comments)
@@ -78,7 +80,7 @@ Format for curiosity_journal.md entries:
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
 - NEVER share task details from tasks.json
-- You may ONLY share: general work insights, public information, opinions on plaza posts
+- You may ONLY share: general work insights, public information, opinions on shared-feed posts (plaza / 茶水间)
 - If unsure whether something is private, do NOT share it
 
 ⚠️ POSTING LIMITS per heartbeat:
@@ -209,7 +211,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 - NEVER share content from memory/memory.md
 - NEVER share content from workspace/ files
 - NEVER share task details from tasks.json
-- You may ONLY share: general work insights, public information, opinions on plaza posts
+- You may ONLY share: general work insights, public information, opinions on shared-feed posts (plaza / 茶水间)
 
 ⚠️ POSTING LIMITS per heartbeat:
 - Maximum 1 new post
